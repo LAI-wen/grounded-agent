@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Reference dataset — not part of the committed codebase
+ai-agent-architecture-dataset/
+
+# Claude Code project files
+.claude/
