@@ -13,7 +13,7 @@ from app.schemas import Artifact, Error, SafetyFlag, TraceEntry
 # Type aliases for clarity
 TaskType = Literal["research", "execution", "hybrid"]
 SubgraphIdentifier = Literal["research", "execution", "review"]
-WorkflowStatus = Literal["pending", "running", "awaiting_review", "success", "no_op", "partial", "blocked", "failed"]
+WorkflowStatus = Literal["pending", "running", "awaiting_review", "success", "no_op", "partial", "partial_due_to_retry_limit", "blocked", "failed"]
 
 
 class NormalizedTask(TypedDict):
@@ -115,6 +115,9 @@ class MainState(TypedDict):
 
     # Workspace memory context (injected at turn start from WorkspaceStore)
     workspace_context: Optional[str]
+
+    # Revise loop
+    retry_count: int  # number of revise-loop retries taken so far (0 = initial attempt)
 
     # Status
     status: WorkflowStatus

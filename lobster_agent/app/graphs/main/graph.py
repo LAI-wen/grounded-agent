@@ -107,5 +107,7 @@ def create_initial_state(user_request: str) -> MainState:
         errors=[],
         trace=[],
         safety_flags=[],
+        workspace_context=None,
+        retry_count=0,
         status="pending",
     )

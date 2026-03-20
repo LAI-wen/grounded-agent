@@ -13,7 +13,7 @@ from anthropic import Anthropic
 
 from app.schemas import TraceEntry
 from .prompts.templates import NORMALIZE_TASK_SYSTEM_PROMPT, NORMALIZE_TASK_USER_PROMPT
-from .router import determine_required_subgraphs
+from .router import _MAX_RETRIES, determine_required_subgraphs
 from .state import MainState, Message, NormalizedTask
 
 
@@ -246,6 +246,9 @@ def finalize_response(state: MainState) -> MainState:
             final_status = "success"
         elif verdict == "blocked":
             final_status = "blocked"
+        elif verdict == "revise" and state.get("retry_count", 0) >= _MAX_RETRIES:
+            # Revise loop exhausted — retries did not resolve the issues.
+            final_status = "partial_due_to_retry_limit"
         else:
             final_status = "partial"
     elif execution_result:

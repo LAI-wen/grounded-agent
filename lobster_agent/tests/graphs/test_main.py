@@ -714,5 +714,197 @@ class TestNormalizeTaskFallbackPath:
         assert result["messages"][0]["role"] == "user"
 
 
+# ---------------------------------------------------------------------------
+# Revise loop — router, wrapper, and finalize tests
+# ---------------------------------------------------------------------------
+
+def _state_with_review(verdict: str, retry_count: int = 0, notes: str = ""):
+    """Helper: MainState after review has run with a given verdict."""
+    state = create_initial_state("Create a file")
+    state["required_subgraphs"] = ["execution", "review"]
+    state["current_subgraph"] = "review"
+    state["status"] = "running"
+    state["retry_count"] = retry_count
+    state["review_result"] = {
+        "verdict": verdict,
+        "issues": [],
+        "approved_artifacts": [],
+        "final_response": "response",
+        "review_notes": notes,
+    }
+    return state
+
+
+class TestReviseLoopRouter:
+    """Router correctly routes after review based on verdict and retry_count."""
+
+    def test_revise_verdict_loops_back_to_execution_when_retries_remain(self):
+        from app.graphs.main.router import route_next_step
+        state = _state_with_review("revise", retry_count=0)
+        assert route_next_step(state) == "execution"
+
+    def test_revise_verdict_second_retry_still_loops(self):
+        from app.graphs.main.router import route_next_step
+        state = _state_with_review("revise", retry_count=1)
+        assert route_next_step(state) == "execution"
+
+    def test_revise_verdict_routes_to_finalize_when_retries_exhausted(self):
+        from app.graphs.main.router import route_next_step
+        state = _state_with_review("revise", retry_count=2)  # _MAX_RETRIES == 2
+        assert route_next_step(state) == "finalize"
+
+    def test_fail_verdict_does_not_loop(self):
+        from app.graphs.main.router import route_next_step
+        state = _state_with_review("fail", retry_count=0)
+        assert route_next_step(state) == "finalize"
+
+    def test_blocked_verdict_does_not_loop(self):
+        from app.graphs.main.router import route_next_step
+        state = _state_with_review("blocked", retry_count=0)
+        assert route_next_step(state) == "finalize"
+
+    def test_pass_verdict_does_not_loop(self):
+        from app.graphs.main.router import route_next_step
+        state = _state_with_review("pass", retry_count=0)
+        assert route_next_step(state) == "finalize"
+
+
+class TestReviseLoopWrapper:
+    """invoke_execution_subgraph handles retry detection, count, trace, and notes."""
+
+    def _make_mock_execution_graph(self, success=True):
+        """Return a mock that replaces create_execution_graph().compile().invoke()."""
+        import json
+        from unittest.mock import MagicMock
+        output = {
+            "execution_result": {
+                "actions_taken": ["wrote file"],
+                "artifacts": [],
+                "logs": [],
+                "success": success,
+                "status": "success" if success else "failed",
+                "errors": [],
+            },
+            "safety_check": {"passed": True, "violations": [], "warnings": [], "flags": []},
+            "artifacts": [],
+            "logs": [],
+            "success": success,
+            "errors": [],
+        }
+        compiled = MagicMock()
+        compiled.invoke.return_value = output
+        graph = MagicMock()
+        graph.compile.return_value = compiled
+        return graph
+
+    def test_retry_increments_retry_count(self):
+        from unittest.mock import patch
+        from app.graphs.main.wrappers import invoke_execution_subgraph
+
+        state = _state_with_review("revise", retry_count=0, notes="Fix the output format")
+        mock_graph = self._make_mock_execution_graph()
+
+        with patch("app.graphs.main.wrappers.create_execution_graph", return_value=mock_graph):
+            result = invoke_execution_subgraph(state)
+
+        assert result["retry_count"] == 1
+
+    def test_initial_call_does_not_increment_retry_count(self):
+        from unittest.mock import patch
+        from app.graphs.main.wrappers import invoke_execution_subgraph
+
+        state = create_initial_state("Create a file")
+        state["required_subgraphs"] = ["execution", "review"]
+        state["retry_count"] = 0
+        mock_graph = self._make_mock_execution_graph()
+
+        with patch("app.graphs.main.wrappers.create_execution_graph", return_value=mock_graph):
+            result = invoke_execution_subgraph(state)
+
+        assert result["retry_count"] == 0
+
+    def test_retry_adds_revise_loop_trace_entry(self):
+        from unittest.mock import patch
+        from app.graphs.main.wrappers import invoke_execution_subgraph
+
+        state = _state_with_review("revise", retry_count=0, notes="Output was malformed")
+        mock_graph = self._make_mock_execution_graph()
+
+        with patch("app.graphs.main.wrappers.create_execution_graph", return_value=mock_graph):
+            result = invoke_execution_subgraph(state)
+
+        revise_entries = [t for t in result["trace"] if t.node_name == "revise_loop"]
+        assert len(revise_entries) == 1
+        assert revise_entries[0].status == "revise_loop"
+        assert "attempt 2/3" in revise_entries[0].input_summary
+        assert "Output was malformed" in revise_entries[0].output_summary
+
+    def test_review_notes_appended_to_task_description(self):
+        """Review notes are fed into the task_description passed to the execution subgraph."""
+        from unittest.mock import patch
+        from app.graphs.main.wrappers import invoke_execution_subgraph
+
+        notes = "The file content was incomplete"
+        state = _state_with_review("revise", retry_count=0, notes=notes)
+        state["normalized_task"] = {
+            "objective": "Create hello.txt",
+            "constraints": [],
+            "requested_outputs": ["file"],
+            "assumptions": [],
+            "priority": "medium",
+        }
+        mock_graph = self._make_mock_execution_graph()
+        captured_inputs = []
+
+        def capture_input(state):
+            captured_inputs.append(state["task_description"])
+            return mock_graph.compile().invoke(state)
+
+        # Patch create_execution_input to capture what task_description was passed
+        from app.graphs.execution import create_execution_input as real_cei
+        def patched_cei(task_description, **kwargs):
+            captured_inputs.append(task_description)
+            return real_cei(task_description=task_description, **kwargs)
+
+        with (
+            patch("app.graphs.main.wrappers.create_execution_graph", return_value=mock_graph),
+            patch("app.graphs.main.wrappers.create_execution_input", side_effect=patched_cei),
+        ):
+            invoke_execution_subgraph(state)
+
+        assert len(captured_inputs) == 1
+        assert notes in captured_inputs[0]
+        assert "Previous attempt feedback" in captured_inputs[0]
+
+
+class TestReviseLoopFinalize:
+    """finalize_response sets partial_due_to_retry_limit when retries are exhausted."""
+
+    def test_partial_due_to_retry_limit_when_retries_exhausted(self):
+        from app.graphs.main.nodes import finalize_response
+
+        state = _state_with_review("revise", retry_count=2)  # exhausted
+        result = finalize_response(state)
+
+        assert result["status"] == "partial_due_to_retry_limit"
+
+    def test_partial_when_revise_but_retries_remain(self):
+        """If somehow finalize is called with revise+retries remaining, status is partial."""
+        from app.graphs.main.nodes import finalize_response
+
+        state = _state_with_review("revise", retry_count=1)  # still has one retry left
+        result = finalize_response(state)
+
+        # retry_count=1 < _MAX_RETRIES=2, so not exhausted → plain partial
+        assert result["status"] == "partial"
+
+    def test_pass_still_sets_success(self):
+        from app.graphs.main.nodes import finalize_response
+
+        state = _state_with_review("pass", retry_count=2)
+        result = finalize_response(state)
+        assert result["status"] == "success"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

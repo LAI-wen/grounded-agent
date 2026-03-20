@@ -10,6 +10,7 @@ from app.schemas import TraceEntry
 from app.graphs.research import create_research_graph, create_research_input
 from app.graphs.execution import create_execution_graph, create_execution_input
 from app.graphs.review import create_review_graph, create_review_input
+from .router import _MAX_RETRIES
 from .state import MainState, ResearchResult, ExecutionResult, ReviewResult
 
 
@@ -59,7 +60,7 @@ def invoke_research_subgraph(state: MainState) -> MainState:
             node_name="invoke_research_subgraph",
             subgraph="research",
             timestamp=datetime.utcnow(),
-            input_summary=f"task: '{state.get('normalized_task', {}).get('objective', '')[:50]}...'",
+            input_summary=f"task: '{(state.get('normalized_task') or {}).get('objective', '')[:50]}...'",
             output_summary=f"confidence: {research_result['confidence']}, evidence: {len(research_result['evidence'])} items",
             status="success",
         )
@@ -88,7 +89,7 @@ def invoke_research_subgraph(state: MainState) -> MainState:
             node_name="invoke_research_subgraph",
             subgraph="research",
             timestamp=datetime.utcnow(),
-            input_summary=f"task: '{state.get('normalized_task', {}).get('objective', '')[:50]}...'",
+            input_summary=f"task: '{(state.get('normalized_task') or {}).get('objective', '')[:50]}...'",
             output_summary=f"FAILED: {str(e)[:100]}",
             status="failure",
         )
@@ -110,15 +111,52 @@ def invoke_execution_subgraph(state: MainState) -> MainState:
     2. Invokes execution subgraph
     3. Maps ExecutionState output → MainState
 
+    On a revise-loop retry (prior review verdict == "revise"):
+    - Increments retry_count in state
+    - Prepends a revise_loop TraceEntry (attempt #, prior revise reason)
+    - Feeds review_notes into the task description so the planner can act on them
+
     Handles failures by creating structured Error and failure TraceEntry.
     """
     from app.schemas import Error
 
+    # ── Revise-loop detection ───────────────────────────────────────────────
+    prior_review = state.get("review_result") or {}
+    prior_verdict = prior_review.get("verdict")
+    retry_count = state.get("retry_count", 0)
+    current_trace = list(state.get("trace", []))
+
+    if prior_verdict == "revise":
+        retry_count += 1
+        prior_notes = (prior_review.get("review_notes") or "")[:120]
+        retry_trace = TraceEntry(
+            step_id=f"trace_{len(current_trace)}",
+            node_name="revise_loop",
+            subgraph="execution",
+            timestamp=datetime.utcnow(),
+            input_summary=f"attempt {retry_count + 1}/{_MAX_RETRIES + 1} — prior verdict: revise",
+            output_summary=f"revise reason: {prior_notes}",
+            status="revise_loop",
+        )
+        current_trace = [*current_trace, retry_trace]
+
     try:
         # Step 1: Map MainState to ExecutionState input
         normalized_task = state.get("normalized_task") or {}
+        task_description = normalized_task.get("objective", state["user_request"])
+
+        # Feed prior review notes into the task description so the planner sees
+        # what to fix.  Only populated on retries.
+        if prior_verdict == "revise":
+            prior_notes_full = (prior_review.get("review_notes") or "").strip()
+            if prior_notes_full:
+                task_description = (
+                    f"{task_description}\n\n"
+                    f"Previous attempt feedback (revise verdict): {prior_notes_full}"
+                )
+
         execution_input = create_execution_input(
-            task_description=normalized_task.get("objective", state["user_request"]),
+            task_description=task_description,
             context={
                 "user_request": state["user_request"],
                 "research_result": state.get("research_result"),
@@ -157,13 +195,13 @@ def invoke_execution_subgraph(state: MainState) -> MainState:
         # Determine trace status based on execution success
         trace_status = "success" if execution_result["success"] else "partial"
 
-        # Create trace entry
+        # Create trace entry (step_id from current_trace which may include retry entry)
         trace_entry = TraceEntry(
-            step_id=f"trace_{len(state.get('trace', []))}",
+            step_id=f"trace_{len(current_trace)}",
             node_name="invoke_execution_subgraph",
             subgraph="execution",
             timestamp=datetime.utcnow(),
-            input_summary=f"task: '{state.get('normalized_task', {}).get('objective', '')[:50]}...'",
+            input_summary=f"task: '{(state.get('normalized_task') or {}).get('objective', '')[:50]}...'",
             output_summary=f"success: {execution_result['success']}, actions: {len(execution_result['actions_taken'])}",
             status=trace_status,
         )
@@ -178,7 +216,8 @@ def invoke_execution_subgraph(state: MainState) -> MainState:
             "execution_result": execution_result,
             "artifacts": updated_artifacts,
             "errors": updated_errors,
-            "trace": [*state.get("trace", []), trace_entry],
+            "retry_count": retry_count,
+            "trace": [*current_trace, trace_entry],
         }
 
     except Exception as e:
@@ -194,11 +233,11 @@ def invoke_execution_subgraph(state: MainState) -> MainState:
 
         # Create failure trace entry
         trace_entry = TraceEntry(
-            step_id=f"trace_{len(state.get('trace', []))}",
+            step_id=f"trace_{len(current_trace)}",
             node_name="invoke_execution_subgraph",
             subgraph="execution",
             timestamp=datetime.utcnow(),
-            input_summary=f"task: '{state.get('normalized_task', {}).get('objective', '')[:50]}...'",
+            input_summary=f"task: '{(state.get('normalized_task') or {}).get('objective', '')[:50]}...'",
             output_summary=f"FAILED: {str(e)[:100]}",
             status="failure",
         )
@@ -207,7 +246,8 @@ def invoke_execution_subgraph(state: MainState) -> MainState:
             **state,
             "current_subgraph": "execution",
             "errors": [*state.get("errors", []), error],
-            "trace": [*state.get("trace", []), trace_entry],
+            "retry_count": retry_count,
+            "trace": [*current_trace, trace_entry],
             "status": "failed",  # Execution failure is critical, mark as failed
         }
 

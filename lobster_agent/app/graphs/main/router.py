@@ -7,6 +7,9 @@ from typing import Literal
 
 from .state import MainState, SubgraphIdentifier
 
+# Maximum number of revise-loop retries (initial attempt + up to 2 retries = 3 total).
+_MAX_RETRIES = 2
+
 
 def route_next_step(state: MainState) -> Literal["research", "execution", "review", "finalize", "error"]:
     """Determine the next node to execute based on workflow state.
@@ -50,7 +53,16 @@ def route_next_step(state: MainState) -> Literal["research", "execution", "revie
                 next_subgraph = required[current_idx + 1]
                 return next_subgraph  # type: ignore
             else:
-                # All subgraphs complete
+                # All subgraphs complete — check for revise loop before finalizing.
+                # If review produced a 'revise' verdict and retries remain, route
+                # back to execution so the planner can act on the review notes.
+                review_result = state.get("review_result") or {}
+                if (
+                    current == "review"
+                    and review_result.get("verdict") == "revise"
+                    and state.get("retry_count", 0) < _MAX_RETRIES
+                ):
+                    return "execution"
                 return "finalize"
         except ValueError:
             # Should not happen since we checked `in` above, but be safe

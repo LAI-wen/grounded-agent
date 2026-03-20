@@ -35,7 +35,7 @@ class TraceEntry(BaseModel):
         default="",
         description="Brief summary of outputs (not full payload)"
     )
-    status: Literal["success", "failure", "partial"] = Field(
+    status: Literal["success", "failure", "partial", "revise_loop"] = Field(
         description="Step execution status"
     )
 
