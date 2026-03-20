@@ -141,16 +141,10 @@ def test_research_flow_handles_retrieval_api_failure(monkeypatch):
 
 
 def test_research_flow_with_empty_retrieval_results(monkeypatch):
-    """Test research flow when retrieval returns no results (Phase 2A: adapter-based)."""
-    monkeypatch.setenv("RETRIEVAL_SERVICE_URL", "http://test-api.com")
+    """Test research flow when retrieval returns no results."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    # Mock API returning empty results (patch http_adapter, not retrieval.py)
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"results": []}
-
-    with patch('app.graphs.research.services.adapters.http_adapter.requests.post', return_value=mock_response):
+    with patch('app.graphs.research.nodes.retrieve.search_sources', return_value=[]):
         graph = create_research_graph()
         compiled_graph = graph.compile()
 

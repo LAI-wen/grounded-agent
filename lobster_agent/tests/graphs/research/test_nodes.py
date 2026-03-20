@@ -111,24 +111,18 @@ def test_normalize_query_llm_failure():
 # ===== retrieve_sources tests =====
 
 def test_retrieve_sources_with_api(monkeypatch):
-    """Test retrieve_sources with successful API call (Phase 2A: adapter-based)."""
-    monkeypatch.setenv("RETRIEVAL_SERVICE_URL", "http://test-api.com")
+    """Test retrieve_sources node maps search_sources output to Source schema correctly."""
+    fake_sources = [
+        {
+            "url": "http://example.com/1",
+            "title": "Test Source 1",
+            "content": "Test content 1",
+            "reliability_score": 0.9,
+            "metadata": {"adapter": "http"},
+        }
+    ]
 
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "results": [
-            {
-                "url": "http://example.com/1",
-                "title": "Test Source 1",
-                "content": "Test content 1",
-                "score": 0.9
-            }
-        ]
-    }
-
-    # Patch requests.post in the http_adapter module (not retrieval.py)
-    with patch('app.graphs.research.services.adapters.http_adapter.requests.post', return_value=mock_response):
+    with patch('app.graphs.research.nodes.retrieve.search_sources', return_value=fake_sources):
         state = create_test_state(normalized_query="test query")
         result = retrieve_sources(state)
 

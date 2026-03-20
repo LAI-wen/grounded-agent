@@ -178,6 +178,63 @@ Key V3 properties:
 
 ---
 
+## V4 Capabilities (External Retrieval)
+
+V4 adds web search to the research pipeline via the Tavily API. When
+`TAVILY_API_KEY` is set, `search_sources()` runs both local file retrieval
+and web retrieval in parallel (sequentially but always attempted), merging
+results into a single ranked list.
+
+**Adapter design**
+
+- `LocalFileRetrievalAdapter` — always runs (max 10 results when combined with web)
+- `WebSearchAdapter` — runs when `TAVILY_API_KEY` is set (max 5 results, 8s timeout)
+- Web failures are silent: local-only results returned if the Tavily call fails
+- Passing an explicit `adapter=` to `search_sources()` preserves backward
+  compatibility for tests and the legacy HTTP adapter
+
+**Source schema additions**
+
+Web sources are distinguished from local sources by their metadata:
+
+```python
+{
+    "url":               "https://example.com/page",   # always populated for web
+    "title":             "...",
+    "content":           "...",                         # capped at 1000 chars
+    "reliability_score": 0.88,                         # from Tavily score or 0.7 default
+    "metadata": {
+        "adapter":  "web_search",
+        "provider": "tavily",
+        "rank":     1,
+    }
+}
+```
+
+**V4 demo** (validated 2026-03-20, mocked Tavily response):
+
+```
+search_sources("lobster agent research", TAVILY_API_KEY=set)
+  → 10 local_file sources  (LocalFileRetrievalAdapter)
+  →  2 web_search sources  (WebSearchAdapter, Tavily API)
+  combined: 12 sources, ranked by filter_sources
+
+search_sources("lobster agent research", TAVILY_API_KEY=absent)
+  → 1 local_file source only
+  → requests.post NOT called
+```
+
+**Configuration**
+
+```bash
+# Enable web search (add alongside ANTHROPIC_API_KEY)
+export TAVILY_API_KEY=tvly-...
+```
+
+No additional Python dependencies — Tavily is called via `requests` (already in requirements.txt).
+
+---
+
 ## Validated Workflows
 
 All six V1 scenarios pass live validation (`lobster_agent/scripts/validate_live.py`):
@@ -297,7 +354,8 @@ lobster_agent/
 │   ├── validate_m2_ollama.py   # M2 cross-model robustness check (Ollama)
 │   ├── validate_m3_live.py     # V2 M3 live validation — 3-session demo
 │   ├── validate_v3m1_live.py   # V3 M1 live validation — suggestion quality
-│   └── validate_v3m2_live.py   # V3 M2 live validation — cross-session recall
+│   ├── validate_v3m2_live.py   # V3 M2 live validation — cross-session recall
+│   └── validate_v4_live.py     # V4 live validation — external retrieval
 └── tests/
     ├── graphs/                 # Subgraph and integration tests
     └── memory/                 # WorkspaceStore unit tests
@@ -309,7 +367,7 @@ lobster_agent/
 
 - **Tools**: `file_read` and `file_write` only — no shell commands, no web
   requests, no API calls from within execution
-- **Retrieval**: local file walk only — no HTTP sources
+- **Retrieval**: local file walk + optional web search (Tavily) — no other HTTP sources
 - **File writes**: full overwrite only — no append semantics
 - **Workspace memory**: task summaries, artifact paths, and most recent suggestion —
   no preference detection (not yet implemented)
@@ -326,4 +384,4 @@ lobster_agent/
 - [LangGraph](https://github.com/langchain-ai/langgraph) — graph orchestration and checkpointing
 - [Anthropic API](https://docs.anthropic.com) — `claude-haiku-4-5-20251001` for all LLM calls
 - SQLite — conversation thread persistence via LangGraph MemorySaver
-- pytest — 179 unit and integration tests
+- pytest — 191 unit and integration tests

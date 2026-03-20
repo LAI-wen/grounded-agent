@@ -7,10 +7,12 @@ from .base import RetrievalAdapter
 from .http_adapter import HTTPRetrievalAdapter
 from .local_file_adapter import LocalFileRetrievalAdapter
 from .mock_adapter import MockRetrievalAdapter
+from .web_search_adapter import WebSearchAdapter
 
 __all__ = [
     "RetrievalAdapter",
     "HTTPRetrievalAdapter",
     "LocalFileRetrievalAdapter",
     "MockRetrievalAdapter",
+    "WebSearchAdapter",
 ]
