@@ -76,9 +76,47 @@ composes the final response from whichever subgraphs ran.
 
 ---
 
+## V2 Capabilities (Workspace Memory)
+
+**Workspace memory store** (`app/memory/workspace.py`)
+- Append-only JSONL file at `<project_root>/.lobster/workspace_memory.jsonl`
+- Two record types: `task_summary` (one per completed task) and `artifact`
+  (one per file written by the execution subgraph)
+- Scoped strictly to the current project root — no cross-project sharing
+- Human-readable and user-deletable; removing the file resets memory with no
+  other effect on the agent
+
+**Read path — start of each turn**
+- `WorkspaceStore.read_context()` reads the last 5 task summaries and formats
+  them into a compact `workspace_context` block
+- Capped at 1500 characters to protect token budget
+- Injected into `MainState.workspace_context` before the graph runs
+
+**Context injection**
+- `normalize_task` receives `workspace_context` so task classification knows
+  what the agent has previously done in this project
+- `synthesize_evidence` receives `workspace_context` so research synthesis can
+  answer questions like "what files have you created?" even when no matching
+  local files are found by the file walk
+
+**Write path — end of each turn**
+- Written only on `status == "success"` or review `verdict == "pass"`
+- Artifact paths normalised relative to project root; paths outside root are
+  silently dropped
+- Retention limits: 50 task summaries, 100 artifact records (older entries
+  trimmed on write)
+
+**What is not stored**
+- File contents (paths and metadata only)
+- API keys or credentials
+- Raw conversation messages (those belong to the thread checkpointer)
+- Data from paths outside `project_root`
+
+---
+
 ## Validated Workflows
 
-All six scenarios pass live validation (`lobster_agent/scripts/validate_live.py`):
+All six V1 scenarios pass live validation (`lobster_agent/scripts/validate_live.py`):
 
 | Scenario | Workflow type | Result |
 |---|---|---|
@@ -88,6 +126,13 @@ All six scenarios pass live validation (`lobster_agent/scripts/validate_live.py`
 | Pure research query | research | Evidence synthesised, confidence reported |
 | Ambiguous request | hybrid | Routes to hybrid, partial result |
 | Multi-turn contextual follow-up | research | Answer grounded in prior conversation |
+
+V2 M1 two-session demo (live-validated):
+
+| Session | Request | Result |
+|---|---|---|
+| 1 | Create hello.txt | File written, store records `task_summary` + `artifact` |
+| 2 (new thread) | What files have you created? | Answers `hello.txt` from workspace history, 0.95 confidence |
 
 ---
 
@@ -134,7 +179,7 @@ cd lobster_agent
 pytest tests/ -q
 ```
 
-150 tests, no external dependencies required.
+165 tests, no external dependencies required.
 
 ---
 

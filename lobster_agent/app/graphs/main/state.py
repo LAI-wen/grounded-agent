@@ -112,5 +112,8 @@ class MainState(TypedDict):
     trace: list[TraceEntry]
     safety_flags: list[SafetyFlag]
 
+    # Workspace memory context (injected at turn start from WorkspaceStore)
+    workspace_context: Optional[str]
+
     # Status
     status: WorkflowStatus

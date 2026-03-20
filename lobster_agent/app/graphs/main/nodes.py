@@ -36,10 +36,13 @@ def normalize_task(state: MainState) -> MainState:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     fallback_used = False
     conversation_history = _format_conversation_history(state.get("messages", []))
+    workspace_context = state.get("workspace_context") or ""
 
     if api_key:
         try:
-            normalized_task, task_type = _llm_normalize(user_request, api_key, conversation_history)
+            normalized_task, task_type = _llm_normalize(
+                user_request, api_key, conversation_history, workspace_context
+            )
         except Exception as e:
             normalized_task, task_type = _fallback_normalize(user_request)
             fallback_used = True
@@ -107,7 +110,7 @@ def _format_conversation_history(messages: list) -> str:
     return "\n" + "\n".join(lines)
 
 
-def _llm_normalize(user_request: str, api_key: str, conversation_history: str = ""):
+def _llm_normalize(user_request: str, api_key: str, conversation_history: str = "", workspace_context: str = ""):
     """Call Claude to classify and extract NormalizedTask fields.
 
     Returns (normalized_task, task_type).
@@ -124,6 +127,7 @@ def _llm_normalize(user_request: str, api_key: str, conversation_history: str = 
             "content": NORMALIZE_TASK_USER_PROMPT.format(
                 user_request=user_request,
                 conversation_history=conversation_history,
+                workspace_context=workspace_context,
             ),
         }],
     )

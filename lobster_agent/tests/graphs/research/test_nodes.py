@@ -283,13 +283,76 @@ def test_synthesize_evidence_without_api_key(monkeypatch):
 
 
 def test_synthesize_evidence_empty_sources():
-    """Test synthesize_evidence handles empty filtered sources."""
-    state = create_test_state(filtered_sources=[])
+    """Test synthesize_evidence early-returns when sources AND workspace_context are both absent."""
+    state = create_test_state(filtered_sources=[], context={})
     result = synthesize_evidence(state)
 
     assert result["evidence"] == []
     assert result["confidence"] == 0.0
     assert "No sources available" in result["summary"]
+
+
+def test_synthesize_evidence_workspace_context_bypasses_early_return():
+    """When filtered_sources is empty but workspace_context is present, LLM is called."""
+    import json as json_module
+
+    llm_response = {
+        "evidence": ["hello.txt was created in the previous session"],
+        "citations": [],
+        "confidence": 0.8,
+        "open_questions": [],
+    }
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    workspace_ctx = "\nWorkspace history (recent tasks):\n- [2026-03-20] execution: \"Create hello.txt\" → success, artifacts: [hello.txt]\n"
+    state = create_test_state(
+        filtered_sources=[],
+        context={"workspace_context": workspace_ctx},
+        normalized_query="What files have you created?",
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+            result = synthesize_evidence(state)
+
+    # LLM was called (not early-returned)
+    mock_client.messages.create.assert_called_once()
+    # workspace_context appeared in the prompt
+    call_kwargs = mock_client.messages.create.call_args
+    prompt_text = call_kwargs[1]["messages"][0]["content"]
+    assert "Workspace history" in prompt_text
+    # Result came from LLM
+    assert result["evidence"] == ["hello.txt was created in the previous session"]
+    assert result["confidence"] == 0.8
+
+
+def test_synthesize_evidence_workspace_context_in_prompt():
+    """workspace_context block is included in the formatted user prompt."""
+    import json as json_module
+
+    llm_response = {"evidence": [], "citations": [], "confidence": 0.5, "open_questions": []}
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    workspace_ctx = "\nWorkspace history (recent tasks):\n- [2026-03-20] execution: \"Build X\" → success\n"
+    source = {"title": "Doc", "content": "Some content", "reliability_score": 0.7, "metadata": {}}
+    state = create_test_state(
+        filtered_sources=[source],
+        context={"workspace_context": workspace_ctx},
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+            synthesize_evidence(state)
+
+    call_kwargs = mock_client.messages.create.call_args
+    prompt_text = call_kwargs[1]["messages"][0]["content"]
+    assert "Workspace history" in prompt_text
 
 
 # ===== finalize_research tests =====

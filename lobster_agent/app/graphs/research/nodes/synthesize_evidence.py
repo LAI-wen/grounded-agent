@@ -54,8 +54,12 @@ def synthesize_evidence(state: ResearchState) -> ResearchState:
     filtered_sources = state.get("filtered_sources", [])
     normalized_query = state.get("normalized_query") or state["research_query"]
 
-    if not filtered_sources:
-        # No sources to synthesize
+    # Extract context fields
+    context = state.get("context") or {}
+    workspace_context = context.get("workspace_context", "")
+
+    if not filtered_sources and not workspace_context:
+        # No sources and no workspace context — nothing to synthesize
         return {
             **state,
             "evidence": [],
@@ -81,17 +85,19 @@ def synthesize_evidence(state: ResearchState) -> ResearchState:
         sources_text = "\n\n".join([
             f"Source {idx + 1}: {s['title']}\n{s['content'][:500]}..."
             for idx, s in enumerate(filtered_sources[:10])  # Limit to 10 sources for token efficiency
-        ])
+        ]) if filtered_sources else "(no file sources retrieved)"
 
-        # Extract conversation history from context if available
-        context = state.get("context") or {}
+        # Extract conversation history and workspace context from context
         messages = context.get("messages", [])
         conversation_history = _format_conversation_history(messages)
+        # Format workspace_context with a trailing newline so prompt renders cleanly
+        workspace_context_block = f"\n{workspace_context}\n" if workspace_context else ""
 
         user_prompt = SYNTHESIZE_EVIDENCE_USER_PROMPT.format(
             normalized_query=normalized_query,
             sources_text=sources_text,
             conversation_history=conversation_history,
+            workspace_context=workspace_context_block,
         )
 
         # Call Claude for evidence synthesis

@@ -33,6 +33,7 @@ def invoke_research_subgraph(state: MainState) -> MainState:
             context={
                 "user_request": state["user_request"],
                 "messages": state.get("messages", []),
+                "workspace_context": state.get("workspace_context", ""),
             },
             task_id=state["task_id"]
         )

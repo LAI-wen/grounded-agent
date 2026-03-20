@@ -89,7 +89,7 @@ Return ONLY a JSON object with this structure:
 }"""
 
 SYNTHESIZE_EVIDENCE_USER_PROMPT = """Research query: {normalized_query}
-{conversation_history}
+{workspace_context}{conversation_history}
 Filtered sources:
 {sources_text}
 

@@ -4,11 +4,13 @@ Phase 1: Basic skeleton with minimal functionality.
 Phase 2+: Enhanced with real LLM integration, tools, and features.
 """
 
+import os
 from typing import Optional
 import uuid
 
 from app.graphs.main import create_main_graph, create_initial_state, MainState
 from app.memory.checkpointer import create_checkpointer
+from app.memory.workspace import WorkspaceStore
 
 
 def run_lobster_agent(
@@ -42,11 +44,22 @@ def run_lobster_agent(
         compiled_graph = graph.compile()
         prior_messages = []
 
+    # Read workspace context (silent no-op when .lobster/ is absent)
+    workspace_store = WorkspaceStore(os.getcwd())
+    workspace_context = workspace_store.read_context()
+
     initial_state = create_initial_state(user_request)
     if prior_messages:
         initial_state = {**initial_state, "messages": prior_messages}
+    if workspace_context:
+        initial_state = {**initial_state, "workspace_context": workspace_context}
 
-    return compiled_graph.invoke(initial_state, config)
+    result = compiled_graph.invoke(initial_state, config)
+
+    # Persist memory for successfully completed tasks (silent on error)
+    workspace_store.write_task_summary(result)
+
+    return result
 
 
 def main():

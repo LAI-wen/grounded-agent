@@ -42,4 +42,4 @@ Do not add any keys beyond the seven listed above.
 
 NORMALIZE_TASK_USER_PROMPT = """\
 User request: {user_request}
-{conversation_history}"""
+{workspace_context}{conversation_history}"""
