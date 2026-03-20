@@ -69,8 +69,7 @@ def execute_actions(state: ExecutionState) -> ExecutionState:
 
     # Keywords in a write step's action that signal append / preserve semantics
     _APPEND_KEYWORDS = frozenset({
-        "append", "preserve existing", "preserve prior", "add to existing",
-        "based on file_read", "base on file_read", "add new",
+        "append", "preserve existing", "add to existing", "add new",
     })
 
     for step in execution_plan:

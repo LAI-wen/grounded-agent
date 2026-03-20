@@ -716,9 +716,9 @@ def test_plan_prompt_contains_preservation_instructions():
     """PLAN_EXECUTION_SYSTEM_PROMPT includes content-preservation rules for update steps."""
     from app.graphs.execution.prompts.templates import PLAN_EXECUTION_SYSTEM_PROMPT
     lowered = PLAN_EXECUTION_SYSTEM_PROMPT.lower()
-    assert "preserve" in lowered
     assert "append" in lowered
-    assert "replace" in lowered or "discard" in lowered
+    assert "discard" in lowered
+    assert "do not overwrite" in lowered
 
 
 def test_generate_prompt_contains_append_mode_instructions():

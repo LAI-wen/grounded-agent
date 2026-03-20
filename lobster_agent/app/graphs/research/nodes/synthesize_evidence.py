@@ -93,6 +93,13 @@ def synthesize_evidence(state: ResearchState) -> ResearchState:
         # Format workspace_context with a trailing newline so prompt renders cleanly
         workspace_context_block = f"\n{workspace_context}\n" if workspace_context else ""
 
+        if filtered_sources and workspace_context:
+            source_log = f"Synthesizing from {len(filtered_sources)} file source(s) and workspace history (combined)"
+        elif filtered_sources:
+            source_log = f"Synthesizing from {len(filtered_sources)} file source(s)"
+        else:
+            source_log = "Synthesizing from workspace history only (no file sources)"
+
         user_prompt = SYNTHESIZE_EVIDENCE_USER_PROMPT.format(
             normalized_query=normalized_query,
             sources_text=sources_text,
@@ -147,7 +154,8 @@ def synthesize_evidence(state: ResearchState) -> ResearchState:
             "open_questions": open_questions,
             "logs": [
                 *state.get("logs", []),
-                f"Synthesized {len(evidence)} evidence claims from {len(filtered_sources)} sources (confidence: {confidence:.2f})"
+                source_log,
+                f"Synthesized {len(evidence)} evidence claims (confidence: {confidence:.2f})"
             ],
         }
 

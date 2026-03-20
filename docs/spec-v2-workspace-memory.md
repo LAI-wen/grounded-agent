@@ -1,6 +1,6 @@
 # Spec: V2 Workspace Memory
 
-**Status**: Milestone 1 complete. Live-validated 2026-03-20.
+**Status**: Milestones 1, 2, and 3 complete. All live-validated 2026-03-20.
 **Depends on**: V1 complete (150 tests passing, live-validated).
 
 ---
@@ -271,8 +271,147 @@ Session 2: "Append 'V2 milestone reached.' to notes.txt"
 ```
 
 **Append keyword set** (triggers combine in execute):
-`"append"`, `"preserve existing"`, `"preserve prior"`, `"add to existing"`,
-`"based on file_read"`, `"base on file_read"`, `"add new"`
+`"append"`, `"preserve existing"`, `"add to existing"`, `"add new"`
 
 **Not in M2:** preference detection, research continuation improvements.
 See roadmap M3.
+
+---
+
+## M2 cross-model robustness validation
+
+**Script**: `scripts/validate_m2_ollama.py`
+**Models tested**: `mistral:7b-instruct`, `llama3.2:3b`
+**Scenarios**:
+- A — Append (explicit): "Append the line 'Second entry.' to notes.txt"
+- B — Extend (implicit): "Add a summary section to notes.txt"
+- C — Replace (explicit): "Rewrite notes.txt from scratch with completely new content"
+
+**Results after all production fixes (2026-03-20):**
+
+| Model | Scenario | Plan | E2E |
+|---|---|---|---|
+| mistral:7b-instruct | A Append | PASS | FAIL† |
+| mistral:7b-instruct | B Extend | PASS | FAIL† |
+| mistral:7b-instruct | C Replace | PASS | PASS |
+| llama3.2:3b | A Append | FAIL‡ | FAIL‡ |
+| llama3.2:3b | B Extend | FAIL‡ | FAIL‡ |
+| llama3.2:3b | C Replace | PASS | FAIL‡ |
+
+† Model-level weakness (see below). ‡ Model below reliability threshold (see below).
+
+---
+
+### Fixed production issues (discovered during validation)
+
+These were real code or prompt defects, now corrected:
+
+**1. `"based on file_read"` / `"base on file_read"` over-broad as append keywords**
+- Both models used this phrasing in replace-scenario write actions
+  (e.g. `"Write notes.txt based on file_read result, replacing all content"`),
+  triggering the combine logic on explicit rewrites.
+- Fix: removed from `_APPEND_KEYWORDS` in `execute.py` and from plan prompt examples.
+
+**2. Double braces in `GENERATE_ACTIONS_SYSTEM_PROMPT`**
+- The prompt used `{{`, `}}` (Python format-string escapes) but was never passed
+  to `.format()`. The model received literal `{{` and mimicked it, producing
+  invalid JSON (`{{"path": ...}}`). Parse failure → fallback → empty write content.
+- Fix: replaced all `{{`/`}}` with single `{`/`}` in the generate system prompt.
+
+**3. `"preserve prior"` over-broad as an append keyword**
+- Mistral used `"preserve prior content"` in replace-scenario write actions
+  (e.g. `"Rewrite notes.txt: preserve prior content and discard"`), triggering
+  combine on explicit rewrites.
+- The plan prompt example `"Update <file>: preserve prior content and add …"`
+  was teaching models this phrasing.
+- Fix: removed `"preserve prior"` from `_APPEND_KEYWORDS`; replaced the plan
+  example with unambiguous append-only phrasings.
+
+---
+
+### Known model limitations (not production defects)
+
+These failures are model-level structured-output weaknesses. The production
+implementation (Claude Haiku) handles all three scenarios correctly. No
+production changes are planned to accommodate these.
+
+**mistral:7b-instruct — generate produces `null` tool_input for file_read**
+- Planning is correct (file_read precedes file_write, append keyword in action).
+- In the generate step, mistral emits `"tool_input": null` for file_read steps
+  instead of `{"path": "..."}`. Execute calls file_read with path `""` →
+  read_cache keyed to `""` → path mismatch with write step → combine does not
+  fire → plain overwrite.
+- Affects Scenarios A and B end-to-end. Scenario C (replace) is unaffected
+  because combine is not expected to fire.
+- Mistral passes all three scenarios at the planning layer and passes C
+  end-to-end. It is treated as a partial robustness validator for the planning
+  layer and replace semantics.
+
+**llama3.2:3b — systematic path hallucination and poor structured-output compliance**
+- Consistently generates wrong paths (`src/notes.txt`, `src/output.txt`) despite
+  workspace artifacts showing bare filenames.
+- Reverses step order in generate output; on replace scenarios invents unrelated
+  steps ("Create project directory").
+- All failures stem from the same root: the 3b model does not reliably follow
+  structured JSON output instructions with multi-step plans.
+- llama3.2:3b is below the reliability threshold for this workflow and is not
+  treated as a robustness validator. Its results are recorded for reference only.
+
+---
+
+## Third milestone — Complete
+
+**Status**: Complete. 173 tests passing. Live-validated 2026-03-20.
+
+**Problem addressed:**
+
+M1 and M2 gave the synthesis layer two separate operating modes with no
+integration: when `filtered_sources` had content, `workspace_context` was
+silently dropped; when `filtered_sources` was empty, only `workspace_context`
+was used. A research query against a project with both files and task history
+produced either a file-walk answer or a memory answer, never both.
+
+**Deliverables as implemented:**
+
+1. `app/graphs/research/prompts/templates.py` — `SYNTHESIZE_EVIDENCE_SYSTEM_PROMPT`
+   updated to explicitly name both source types (file sources and workspace history)
+   and instruct the model to draw from both when both are present. Prior behaviour
+   only mentioned conversation context; workspace history was present in the prompt
+   but the model had no instruction to treat it as evidence.
+2. `app/graphs/research/nodes/synthesize_evidence.py` — `source_log` entry added
+   before the LLM call: `"combined"` when both filtered_sources and workspace_context
+   are present; `"file source(s) only"` / `"workspace history only"` otherwise.
+   Makes the active evidence path observable without reading the prompt.
+3. `tests/graphs/research/test_nodes.py` — `test_synthesize_evidence_both_sources_present_in_prompt`:
+   when both `filtered_sources` and `workspace_context` are populated, asserts
+   that both file source content and workspace history appear in the same LLM
+   prompt, and that the `"combined"` log entry is present.
+
+No graph changes, no new record types, no WorkspaceStore changes.
+
+**Live demo result (three-session validation):**
+
+```
+Session 1: "Create notes.txt with initial content"
+  → execution, success, workspace record written
+
+Session 2: "Create summary.txt with a summary of what this project has done"
+  → execution, success, summary.txt created referencing notes.txt
+  → workspace record written
+
+Session 3: "Summarise what this project has done so far"
+  → research, 7 evidence claims from 3 sources, confidence 0.45
+  → file sources: notes.txt ("Day 1 / initial setup"), summary.txt
+  → workspace history: creation date (2026-03-20), task descriptions,
+    artifact names for both sessions
+  → same response names both files AND references workspace creation
+    records including timestamps not present in any file
+```
+
+**Observable M3 difference vs pre-M3:**
+
+Pre-M3: with file sources present, workspace context was dropped. Response
+would have named file content but had no knowledge of creation dates or task
+provenance. Post-M3: both appear in the same answer. The `2026-03-20` date
+and task descriptions in the Session 3 response came from workspace memory
+only — they are not present in any file.

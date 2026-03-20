@@ -78,39 +78,54 @@ composes the final response from whichever subgraphs ran.
 
 ## V2 Capabilities (Workspace Memory)
 
-**Workspace memory store** (`app/memory/workspace.py`)
-- Append-only JSONL file at `<project_root>/.lobster/workspace_memory.jsonl`
+V2 gives the agent durable memory of its own work within a project directory,
+so follow-up sessions can be informed by prior tasks without the user repeating
+context.
+
+**M1 — Cross-session memory store**
+
+- Append-only JSONL at `<project_root>/.lobster/workspace_memory.jsonl`
 - Two record types: `task_summary` (one per completed task) and `artifact`
-  (one per file written by the execution subgraph)
-- Scoped strictly to the current project root — no cross-project sharing
-- Human-readable and user-deletable; removing the file resets memory with no
-  other effect on the agent
+  (one per file written by execution)
+- Read at the start of each turn; last 5 task summaries injected as
+  `workspace_context` into `MainState` before the graph runs
+- `normalize_task` receives the context so classification is aware of prior work
+- `synthesize_evidence` receives the context so research can answer "what files
+  have you created?" even when the file walk returns nothing
+- Write path fires only on success; retention-capped (50 tasks / 100 artifacts)
 
-**Read path — start of each turn**
-- `WorkspaceStore.read_context()` reads the last 5 task summaries and formats
-  them into a compact `workspace_context` block
-- Capped at 1500 characters to protect token budget
-- Injected into `MainState.workspace_context` before the graph runs
+**M2 — Memory-aware execution planning**
 
-**Context injection**
-- `normalize_task` receives `workspace_context` so task classification knows
-  what the agent has previously done in this project
-- `synthesize_evidence` receives `workspace_context` so research synthesis can
-  answer questions like "what files have you created?" even when no matching
-  local files are found by the file walk
+- `workspace_context` injected into the execution planner so it knows which
+  files already exist
+- Planner emits `file_read` before `file_write` for known artifacts; write step
+  action signals preservation semantics (`"append"`, `"add to existing"`)
+- Generator produces only new content in APPEND mode; executor combines
+  `read_cache` result with new content at runtime
+- Prevents silent overwrites of known files when the task requests an update
 
-**Write path — end of each turn**
-- Written only on `status == "success"` or review `verdict == "pass"`
-- Artifact paths normalised relative to project root; paths outside root are
-  silently dropped
-- Retention limits: 50 task summaries, 100 artifact records (older entries
-  trimmed on write)
+**M3 — Unified research synthesis (file sources + workspace history)**
 
-**What is not stored**
-- File contents (paths and metadata only)
-- API keys or credentials
-- Raw conversation messages (those belong to the thread checkpointer)
-- Data from paths outside `project_root`
+- `synthesize_evidence` treats workspace history as a first-class evidence
+  source alongside file sources — both are drawn from in the same synthesis pass
+- Previously: when file sources were present, workspace context was silently
+  dropped. Now: both appear in the same response
+- Evidence items like creation dates and task descriptions come from workspace
+  history; file content and structure come from the file walk
+- Observable difference: a "summarise the project" query after multiple sessions
+  names both file content and when/why each file was created
+
+**Memory store — what is and is not stored**
+
+| Stored | Not stored |
+|---|---|
+| Task summaries (objective, status, verdict) | File contents |
+| Artifact paths and operation type | API keys or credentials |
+| Timestamps | Raw conversation messages |
+| | Data from paths outside `project_root` |
+
+The store is human-readable. Delete `<project_root>/.lobster/workspace_memory.jsonl`
+to reset memory for that workspace; nothing else is affected.
 
 ---
 
@@ -127,19 +142,40 @@ All six V1 scenarios pass live validation (`lobster_agent/scripts/validate_live.
 | Ambiguous request | hybrid | Routes to hybrid, partial result |
 | Multi-turn contextual follow-up | research | Answer grounded in prior conversation |
 
-V2 M1 two-session demo (live-validated):
+**V2 demo transcript** (three sessions, same project root, live-validated):
 
-| Session | Request | Result |
-|---|---|---|
-| 1 | Create hello.txt | File written, store records `task_summary` + `artifact` |
-| 2 (new thread) | What files have you created? | Answers `hello.txt` from workspace history, 0.95 confidence |
+```
+Session 1 — new thread
+  > Create notes.txt with the content:
+    "Project started. Initial notes added on day one."
+  status: success  task_type: execution
+  notes.txt written
+  workspace record: task_summary + artifact(notes.txt)
 
-V2 M2 two-session demo (live-validated):
+Session 2 — new thread
+  > Append "V2 milestone reached." to notes.txt
+  status: success  task_type: execution
+  planner: file_read(notes.txt) → file_write(notes.txt)   ← M2: artifact-aware
+  executor: combines read result + new content
+  notes.txt: "Project started. Initial notes added on day one.
+              V2 milestone reached."
+  workspace record: task_summary + artifact(notes.txt)
 
-| Session | Request | Result |
-|---|---|---|
-| 1 | Create notes.txt with initial content | File written, store records written |
-| 2 (new thread) | Append new line to notes.txt | `file_read` before `file_write`; original content preserved; new line appended |
+Session 3 — new thread
+  > Summarise what this project has done so far.
+  status: success  task_type: research
+  synthesis: 7 evidence claims from 3 sources             ← M3: combined evidence
+    • "A project was initialized on 2026-03-20"            ← from workspace history
+    • "Initial notes added on day one"                     ← from notes.txt content
+    • "notes.txt and summary.txt were created"             ← from workspace history
+    • "V2 milestone reached"                               ← from notes.txt content
+    confidence: 0.45
+```
+
+Key V2 properties visible in the transcript:
+- Session 2 reads notes.txt before writing, preserving prior content (M2)
+- Session 3 names both file content and creation provenance in one response (M3)
+- Session 3 workspace context carries creation dates not present in any file (M3)
 
 ---
 
@@ -186,7 +222,7 @@ cd lobster_agent
 pytest tests/ -q
 ```
 
-172 tests, no external dependencies required.
+173 tests, no external dependencies required.
 
 ---
 
@@ -208,7 +244,9 @@ lobster_agent/
 │   ├── schemas/                # Shared types: Artifact, Error, TraceEntry
 │   └── tools/                  # file_read / file_write (project-scoped)
 ├── scripts/
-│   └── validate_live.py        # Live validation (requires API key)
+│   ├── validate_live.py        # V1 live validation — 6 workflow scenarios
+│   ├── validate_m2_ollama.py   # M2 cross-model robustness check (Ollama)
+│   └── validate_m3_live.py     # M3 live validation — 3-session demo
 └── tests/
     ├── graphs/                 # Subgraph and integration tests
     └── memory/                 # WorkspaceStore unit tests
@@ -223,8 +261,7 @@ lobster_agent/
 - **Retrieval**: local file walk only — no HTTP sources
 - **File writes**: full overwrite only — no append semantics
 - **Workspace memory**: task summaries and artifact paths only — no preference
-  detection, no research/workspace integration when both file sources and
-  workspace history are present (planned V2 M3)
+  detection, no next-step reasoning (planned V3)
 - **Memory inspection**: no CLI command to view or clear workspace memory —
   inspect via `<project_root>/.lobster/workspace_memory.jsonl` directly
 - **Output**: blocking, synchronous — no streaming
@@ -238,4 +275,4 @@ lobster_agent/
 - [LangGraph](https://github.com/langchain-ai/langgraph) — graph orchestration and checkpointing
 - [Anthropic API](https://docs.anthropic.com) — `claude-haiku-4-5-20251001` for all LLM calls
 - SQLite — conversation thread persistence via LangGraph MemorySaver
-- pytest — 172 unit and integration tests
+- pytest — 173 unit and integration tests

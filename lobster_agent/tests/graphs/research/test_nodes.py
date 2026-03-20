@@ -355,6 +355,57 @@ def test_synthesize_evidence_workspace_context_in_prompt():
     assert "Workspace history" in prompt_text
 
 
+def test_synthesize_evidence_both_sources_present_in_prompt():
+    """When both filtered_sources and workspace_context are present, the LLM prompt
+    contains both the file source excerpts and the workspace history — neither is
+    dropped or used as a fallback for the other (M3 behaviour)."""
+    import json as json_module
+
+    llm_response = {
+        "evidence": ["notes.txt exists from prior session", "README describes the project"],
+        "citations": ["workspace history", "README"],
+        "confidence": 0.9,
+        "open_questions": [],
+    }
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    workspace_ctx = (
+        "\nWorkspace history (recent tasks):\n"
+        "- [2026-03-20] execution: \"Create notes.txt\" → success, artifacts: [notes.txt]\n"
+    )
+    source = {
+        "title": "README",
+        "content": "This project is a multi-agent assistant.",
+        "reliability_score": 0.8,
+        "metadata": {},
+    }
+    state = create_test_state(
+        filtered_sources=[source],
+        context={"workspace_context": workspace_ctx},
+        normalized_query="Summarise what this project has done so far",
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+            result = synthesize_evidence(state)
+
+    call_kwargs = mock_client.messages.create.call_args
+    prompt_text = call_kwargs[1]["messages"][0]["content"]
+
+    # Both file source content and workspace history must be in the same prompt
+    assert "README" in prompt_text, "file source title missing from prompt"
+    assert "multi-agent assistant" in prompt_text, "file source content missing from prompt"
+    assert "Workspace history" in prompt_text, "workspace history missing from prompt"
+    assert "notes.txt" in prompt_text, "workspace artifact missing from prompt"
+
+    # Log must identify the combined-source path
+    assert any("combined" in log for log in result["logs"]), \
+        "expected combined-source log entry"
+
+
 # ===== finalize_research tests =====
 
 def test_finalize_research_with_evidence():

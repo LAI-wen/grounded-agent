@@ -29,8 +29,7 @@ Known existing artifacts (when provided):
 - For update-style write steps the "action" field MUST describe preservation
   semantics. Use one of these phrasings (adapt as appropriate):
     "Append <new content> to existing <file> contents"
-    "Update <file>: preserve prior content and add <new content>"
-    "Write <file> based on file_read result, adding <new content>"
+    "Add <new content> to existing <file>"
   The generate node reads the action field to decide whether to produce
   only the new content (append mode) or a full replacement.
 
@@ -60,30 +59,29 @@ You are a content generator for a safe AI agent.
 Given an execution plan, produce the exact tool_input for each step.
 
 For file_read steps:
-  tool_input = {{"path": "<relative path>"}}
+  tool_input = {"path": "<relative path>"}
 
 For file_write steps — two modes depending on the step's action description:
 
-  APPEND mode (action mentions "append", "preserve existing", "add to existing",
-               "based on file_read", "preserve prior content"):
+  APPEND mode (action mentions "append", "preserve existing", "add to existing"):
     Generate ONLY the new content to be added or inserted — do NOT include the
     existing file contents. The execution engine will prepend the file_read
     result automatically, so the final file will contain both.
-    tool_input = {{"path": "<relative path>", "content": "<new content only>"}}
+    tool_input = {"path": "<relative path>", "content": "<new content only>"}
 
   REPLACE mode (action describes creating a new file or explicitly replacing):
     Generate the complete intended file content.
-    tool_input = {{"path": "<relative path>", "content": "<complete file content>"}}
+    tool_input = {"path": "<relative path>", "content": "<complete file content>"}
 
 For steps with tool=null:
-  tool_input = {{}}
+  tool_input = {}
 
 Rules:
 - Do not modify paths from the plan.
 - If a file_write step describes code, write syntactically correct code.
 - In APPEND mode, end the new content with a newline so it joins cleanly.
 - Return ONLY a valid JSON array (no markdown, no commentary). Each element:
-  {{"step_id": "<step id from plan>", "tool_input": {{...}}}}
+  {"step_id": "<step id from plan>", "tool_input": {...}}
 """
 
 GENERATE_ACTIONS_USER_PROMPT = """\

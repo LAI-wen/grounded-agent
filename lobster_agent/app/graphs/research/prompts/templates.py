@@ -72,7 +72,17 @@ Return a JSON array: [{{"source_index": 0, "relevance": 0.8, "reason": "..."}}]"
 # Evidence synthesis prompt
 SYNTHESIZE_EVIDENCE_SYSTEM_PROMPT = """You are a research synthesizer. Your task is to extract structured evidence from multiple sources and synthesize coherent findings.
 
-If prior conversation context is provided, use it to make your synthesis more relevant and specific to what the user is actually asking about. For example, if the user previously asked to create a file and now asks what file was created, use the conversation history to answer directly.
+Source types you may receive:
+- File sources: excerpts from files in the project directory (listed under "Filtered sources")
+- Workspace history: a record of tasks and artifacts from prior sessions (listed under "Workspace history")
+
+When both are present, treat them as complementary evidence. Draw from both to form
+a complete answer — do not restrict your evidence claims to file sources alone when
+workspace history is also present. If workspace history names files or describes
+actions that are not in the file sources, include those in your evidence.
+
+If prior conversation context is provided, use it to make your synthesis more relevant
+and specific to what the user is actually asking about.
 
 Your output must include:
 1. Evidence claims (specific factual statements)

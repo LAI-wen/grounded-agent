@@ -1,0 +1,42 @@
+{
+  "model": "mistral:7b-instruct",
+  "scenario_id": "C",
+  "scenario_label": "Replace (explicit)",
+  "level": "plan",
+  "passed": true,
+  "notes": [
+    "PASS: write action has no preservation keyword (replace semantics intact)"
+  ],
+  "raw_plan_llm_response": " [\n  {\n    \"step_id\": \"step1\",\n    \"action\": \"Read existing notes.txt to incorporate its contents\",\n    \"tool\": \"file_read\",\n    \"params\": {\n      \"path\": \"notes.txt\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step2\",\n    \"action\": \"Rewrite notes.txt with new content\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"notes.txt\",\n      \"content_purpose\": \"New content for the notes.txt file\"\n    },\n    \"status\": \"pending\"\n  }\n]",
+  "parsed_plan_steps": [
+    {
+      "step_id": "step1",
+      "tool": "file_read",
+      "action": "Read existing notes.txt to incorporate its contents"
+    },
+    {
+      "step_id": "step2",
+      "tool": "file_write",
+      "action": "Rewrite notes.txt with new content"
+    }
+  ],
+  "raw_generate_llm_responses": [],
+  "execute_combine_decisions": [],
+  "final_content": null,
+  "llm_calls_full": [
+    {
+      "model": "mistral:7b-instruct",
+      "prompt_messages": [
+        {
+          "role": "system",
+          "content": "You are an execution planner for a safe AI agent.\nYour job is to decompose a task into concrete, ordered steps.\n\nAllowed tools (V1 only):\n- file_read  \u2014 read a file from the project directory\n- file_write \u2014 write content to a file in the project directory\n\nRules:\n- Only use the allowed tools above. Never plan shell commands, network requests,\n  or any operation not covered by file_read / file_write.\n- Every path must be relative (e.g. \"src/output.txt\", not \"/absolute/path\").\n- Keep steps minimal and non-redundant.\n- If the task genuinely cannot be done with file_read / file_write alone,\n  include a single step with tool=null and explain the limitation in \"action\".\n\nKnown existing artifacts (when provided):\n- If the task asks to update, append to, extend, or modify a file that appears\n  in the known existing artifacts list, include a file_read step before any\n  file_write step on that file so the current contents can be incorporated.\n- Do not overwrite or recreate a known existing file unless the task explicitly\n  asks to replace, rewrite, regenerate, or discard prior contents.\n- For update-style write steps the \"action\" field MUST describe preservation\n  semantics. Use one of these phrasings (adapt as appropriate):\n    \"Append <new content> to existing <file> contents\"\n    \"Update <file>: preserve prior content and add <new content>\"\n    \"Add <new content> to existing <file>\"\n  The generate node reads the action field to decide whether to produce\n  only the new content (append mode) or a full replacement.\n\nReturn ONLY a valid JSON array (no markdown, no commentary). Each element:\n{\n  \"step_id\": \"step_N\",\n  \"action\": \"<short description of what this step does>\",\n  \"tool\": \"file_read\" | \"file_write\" | null,\n  \"params\": {\n    \"path\": \"<relative file path>\",\n    \"content_purpose\": \"<for file_write: brief description of what the content should be>\"\n  },\n  \"status\": \"pending\"\n}\n"
+        },
+        {
+          "role": "user",
+          "content": "Task: Rewrite notes.txt from scratch with completely new content\nKnown existing artifacts from workspace context:\n\nWorkspace history (recent tasks):\n- [2026-03-20] execution: \"Create notes.txt with initial content\" \u2192 success, artifacts: [notes.txt]\n\n\nContext: {'project_root': '/var/folders/5b/vz7s47kn2g1f63rqfnkrkqbw0000gn/T/lobster_m2_mistral_C_rirqw9jm'}\n\nCreate an execution plan as a JSON array of steps.\n"
+        }
+      ],
+      "response_text": " [\n  {\n    \"step_id\": \"step1\",\n    \"action\": \"Read existing notes.txt to incorporate its contents\",\n    \"tool\": \"file_read\",\n    \"params\": {\n      \"path\": \"notes.txt\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step2\",\n    \"action\": \"Rewrite notes.txt with new content\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"notes.txt\",\n      \"content_purpose\": \"New content for the notes.txt file\"\n    },\n    \"status\": \"pending\"\n  }\n]"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "model": "llama3.2:3b",
+  "scenario_id": "C",
+  "scenario_label": "Replace (explicit)",
+  "level": "e2e",
+  "passed": false,
+  "notes": [
+    "execution status: unknown",
+    "execute combined read+write: False",
+    "FAIL: original content still present after explicit rewrite (over-combine \u2014 preservation triggered incorrectly)"
+  ],
+  "raw_plan_llm_response": "[\n  {\n    \"step_id\": \"step_1\",\n    \"action\": \"Create project directory\",\n    \"tool\": \"null\",\n    \"params\": {\n      \"path\": \"src/\",\n      \"content_purpose\": \"\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_2\",\n    \"action\": \"Create notes.txt with initial content\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"src/notes.txt\",\n      \"content_purpose\": \"Initial content\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_3\",\n    \"action\": \"Read existing notes.txt contents\",\n    \"tool\": \"file_read\",\n    \"params\": {\n      \"path\": \"src/notes.txt\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_4\",\n    \"action\": \"Append new content to existing notes.txt contents\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"src/notes.txt\",\n      \"content_purpose\": \"New content\"\n    },\n    \"status\": \"pending\"\n  }\n]",
+  "parsed_plan_steps": null,
+  "raw_generate_llm_responses": [
+    "Based on the given execution plan, here is the generated `tool_input` for each step:\n\n```\n[\n  {\n    \"step_id\": \"step_1\",\n    \"tool_input\": {\n      \"path\": \"src/\"\n    }\n  },\n  {\n    \"step_id\": \"step_2\",\n    \"tool_input\": {\n      \"path\": \"src/notes.txt\",\n      \"content\": \"New content goes here.\\n\\n\"\n    }\n  },\n  {\n    \"step_id\": \"step_3\",\n    \"tool_input\": {\n      \"path\": \"src/notes.txt\"\n    }\n  },\n  {\n    \"step_id\": \"step_4\",\n    \"tool_input\": {\n      \"path\": \"src/notes.txt\",\n      \"content\": \"New content goes here.\\n\\n\"\n    }\n  }\n]\n```\n\nNote that I've rewritten the `step_2` and `step_4` `tool_input` to include a valid file content. I've assumed that the `content_purpose` parameter isn't needed for this task. If it's needed, please let me know and I'll adjust it accordingly."
+  ],
+  "execute_combine_decisions": [
+    "execute combined read+write: False",
+    "FAIL: original content still present after explicit rewrite (over-combine \u2014 preservation triggered incorrectly)"
+  ],
+  "final_content": "Original entry.\n",
+  "llm_calls_full": [
+    {
+      "model": "llama3.2:3b",
+      "prompt_messages": [
+        {
+          "role": "system",
+          "content": "You are an execution planner for a safe AI agent.\nYour job is to decompose a task into concrete, ordered steps.\n\nAllowed tools (V1 only):\n- file_read  \u2014 read a file from the project directory\n- file_write \u2014 write content to a file in the project directory\n\nRules:\n- Only use the allowed tools above. Never plan shell commands, network requests,\n  or any operation not covered by file_read / file_write.\n- Every path must be relative (e.g. \"src/output.txt\", not \"/absolute/path\").\n- Keep steps minimal and non-redundant.\n- If the task genuinely cannot be done with file_read / file_write alone,\n  include a single step with tool=null and explain the limitation in \"action\".\n\nKnown existing artifacts (when provided):\n- If the task asks to update, append to, extend, or modify a file that appears\n  in the known existing artifacts list, include a file_read step before any\n  file_write step on that file so the current contents can be incorporated.\n- Do not overwrite or recreate a known existing file unless the task explicitly\n  asks to replace, rewrite, regenerate, or discard prior contents.\n- For update-style write steps the \"action\" field MUST describe preservation\n  semantics. Use one of these phrasings (adapt as appropriate):\n    \"Append <new content> to existing <file> contents\"\n    \"Update <file>: preserve prior content and add <new content>\"\n    \"Add <new content> to existing <file>\"\n  The generate node reads the action field to decide whether to produce\n  only the new content (append mode) or a full replacement.\n\nReturn ONLY a valid JSON array (no markdown, no commentary). Each element:\n{\n  \"step_id\": \"step_N\",\n  \"action\": \"<short description of what this step does>\",\n  \"tool\": \"file_read\" | \"file_write\" | null,\n  \"params\": {\n    \"path\": \"<relative file path>\",\n    \"content_purpose\": \"<for file_write: brief description of what the content should be>\"\n  },\n  \"status\": \"pending\"\n}\n"
+        },
+        {
+          "role": "user",
+          "content": "Task: Rewrite notes.txt from scratch with completely new content\nKnown existing artifacts from workspace context:\n\nWorkspace history (recent tasks):\n- [2026-03-20] execution: \"Create notes.txt with initial content\" \u2192 success, artifacts: [notes.txt]\n\n\nContext: {'project_root': '/var/folders/5b/vz7s47kn2g1f63rqfnkrkqbw0000gn/T/lobster_m2_llama3.2_C_w1drr3v2'}\n\nCreate an execution plan as a JSON array of steps.\n"
+        }
+      ],
+      "response_text": "[\n  {\n    \"step_id\": \"step_1\",\n    \"action\": \"Create project directory\",\n    \"tool\": \"null\",\n    \"params\": {\n      \"path\": \"src/\",\n      \"content_purpose\": \"\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_2\",\n    \"action\": \"Create notes.txt with initial content\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"src/notes.txt\",\n      \"content_purpose\": \"Initial content\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_3\",\n    \"action\": \"Read existing notes.txt contents\",\n    \"tool\": \"file_read\",\n    \"params\": {\n      \"path\": \"src/notes.txt\"\n    },\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_4\",\n    \"action\": \"Append new content to existing notes.txt contents\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"src/notes.txt\",\n      \"content_purpose\": \"New content\"\n    },\n    \"status\": \"pending\"\n  }\n]"
+    },
+    {
+      "model": "llama3.2:3b",
+      "prompt_messages": [
+        {
+          "role": "system",
+          "content": "You are a content generator for a safe AI agent.\nGiven an execution plan, produce the exact tool_input for each step.\n\nFor file_read steps:\n  tool_input = {{\"path\": \"<relative path>\"}}\n\nFor file_write steps \u2014 two modes depending on the step's action description:\n\n  APPEND mode (action mentions \"append\", \"preserve existing\", \"add to existing\",\n               \"preserve prior content\"):\n    Generate ONLY the new content to be added or inserted \u2014 do NOT include the\n    existing file contents. The execution engine will prepend the file_read\n    result automatically, so the final file will contain both.\n    tool_input = {{\"path\": \"<relative path>\", \"content\": \"<new content only>\"}}\n\n  REPLACE mode (action describes creating a new file or explicitly replacing):\n    Generate the complete intended file content.\n    tool_input = {{\"path\": \"<relative path>\", \"content\": \"<complete file content>\"}}\n\nFor steps with tool=null:\n  tool_input = {{}}\n\nRules:\n- Do not modify paths from the plan.\n- If a file_write step describes code, write syntactically correct code.\n- In APPEND mode, end the new content with a newline so it joins cleanly.\n- Return ONLY a valid JSON array (no markdown, no commentary). Each element:\n  {{\"step_id\": \"<step id from plan>\", \"tool_input\": {{...}}}}\n"
+        },
+        {
+          "role": "user",
+          "content": "Task: Rewrite notes.txt from scratch with completely new content\n\nExecution plan:\n[\n  {\n    \"step_id\": \"step_1\",\n    \"action\": \"Create project directory\",\n    \"tool\": \"null\",\n    \"params\": {\n      \"path\": \"src/\",\n      \"content_purpose\": \"\"\n    },\n    \"tool_input\": null,\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_2\",\n    \"action\": \"Create notes.txt with initial content\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"src/notes.txt\",\n      \"content_purpose\": \"Initial content\"\n    },\n    \"tool_input\": null,\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_3\",\n    \"action\": \"Read existing notes.txt contents\",\n    \"tool\": \"file_read\",\n    \"params\": {\n      \"path\": \"src/notes.txt\"\n    },\n    \"tool_input\": null,\n    \"status\": \"pending\"\n  },\n  {\n    \"step_id\": \"step_4\",\n    \"action\": \"Append new content to existing notes.txt contents\",\n    \"tool\": \"file_write\",\n    \"params\": {\n      \"path\": \"src/notes.txt\",\n      \"content_purpose\": \"New content\"\n    },\n    \"tool_input\": null,\n    \"status\": \"pending\"\n  }\n]\n\nGenerate the tool_input for each step. Return a JSON array.\n"
+        }
+      ],
+      "response_text": "Based on the given execution plan, here is the generated `tool_input` for each step:\n\n```\n[\n  {\n    \"step_id\": \"step_1\",\n    \"tool_input\": {\n      \"path\": \"src/\"\n    }\n  },\n  {\n    \"step_id\": \"step_2\",\n    \"tool_input\": {\n      \"path\": \"src/notes.txt\",\n      \"content\": \"New content goes here.\\n\\n\"\n    }\n  },\n  {\n    \"step_id\": \"step_3\",\n    \"tool_input\": {\n      \"path\": \"src/notes.txt\"\n    }\n  },\n  {\n    \"step_id\": \"step_4\",\n    \"tool_input\": {\n      \"path\": \"src/notes.txt\",\n      \"content\": \"New content goes here.\\n\\n\"\n    }\n  }\n]\n```\n\nNote that I've rewritten the `step_2` and `step_4` `tool_input` to include a valid file content. I've assumed that the `content_purpose` parameter isn't needed for this task. If it's needed, please let me know and I'll adjust it accordingly."
+    }
+  ]
+}
