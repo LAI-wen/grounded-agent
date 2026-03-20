@@ -59,6 +59,15 @@ def run_lobster_agent(
     # Persist memory for successfully completed tasks (silent on error)
     workspace_store.write_task_summary(result)
 
+    # Persist the most recent suggestion when research produced one (V3 M2)
+    research_result = result.get("research_result") or {}
+    suggestion = research_result.get("suggested_next_step")
+    if suggestion:
+        workspace_store.write_project_state(
+            task_id=result.get("task_id", ""),
+            suggested_next_step=suggestion,
+        )
+
     return result
 
 

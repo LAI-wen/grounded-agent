@@ -26,6 +26,7 @@ STORE_FILE = "workspace_memory.jsonl"
 
 MAX_TASK_SUMMARIES = 50
 MAX_ARTIFACT_RECORDS = 100
+MAX_PROJECT_STATE_RECORDS = 1   # Only the most recent suggestion is ever useful
 MAX_CONTEXT_CHARS = 1500
 
 
@@ -49,6 +50,11 @@ class WorkspaceStore:
 
         Returns "" when the store is absent, empty, or on any read error.
         Output is capped at MAX_CONTEXT_CHARS to avoid dominating the prompt.
+
+        Format:
+          Workspace history (recent tasks):
+          - [YYYY-MM-DD] task_type: "objective" → status[, artifacts: [...]]
+          Most recent suggestion: <text> (YYYY-MM-DD)
         """
         try:
             records = self._load()
@@ -56,26 +62,38 @@ class WorkspaceStore:
             return ""
 
         summaries = [r for r in records if r.get("type") == "task_summary"]
+        project_states = [r for r in records if r.get("type") == "project_state"]
         recent = summaries[-max_tasks:]
 
-        if not recent:
+        if not recent and not project_states:
             return ""
 
-        lines = []
-        for r in recent:
-            ts = r.get("timestamp", "")[:10]          # date only
-            task_type = r.get("task_type", "?")
-            objective = r.get("objective", "")[:80]
-            status = r.get("status", "?")
-            artifacts = r.get("artifacts", [])
-            artifact_str = (
-                f", artifacts: [{', '.join(artifacts)}]" if artifacts else ""
-            )
-            lines.append(
-                f"- [{ts}] {task_type}: \"{objective}\" → {status}{artifact_str}"
-            )
+        parts = []
 
-        block = "\nWorkspace history (recent tasks):\n" + "\n".join(lines)
+        if recent:
+            task_lines = []
+            for r in recent:
+                ts = r.get("timestamp", "")[:10]          # date only
+                task_type = r.get("task_type", "?")
+                objective = r.get("objective", "")[:80]
+                status = r.get("status", "?")
+                artifacts = r.get("artifacts", [])
+                artifact_str = (
+                    f", artifacts: [{', '.join(artifacts)}]" if artifacts else ""
+                )
+                task_lines.append(
+                    f"- [{ts}] {task_type}: \"{objective}\" → {status}{artifact_str}"
+                )
+            parts.append("Workspace history (recent tasks):\n" + "\n".join(task_lines))
+
+        if project_states:
+            latest = project_states[-1]
+            ts = latest.get("timestamp", "")[:10]
+            suggestion = latest.get("suggested_next_step", "")
+            if suggestion:
+                parts.append(f"Most recent suggestion: {suggestion} ({ts})")
+
+        block = "\n" + "\n".join(parts)
 
         if len(block) > MAX_CONTEXT_CHARS:
             block = block[:MAX_CONTEXT_CHARS - 3] + "..."
@@ -139,6 +157,26 @@ class WorkspaceStore:
 
         except Exception:
             pass  # Memory is optional — never fail the main workflow
+
+    def write_project_state(self, task_id: str, suggested_next_step: str) -> None:
+        """Append a project_state record capturing the most recent suggestion.
+
+        Called after a research turn that produced a non-None suggested_next_step.
+        Retention: last 1 record only (MAX_PROJECT_STATE_RECORDS).
+        Silently no-ops on any error — memory is never load-bearing.
+        """
+        try:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            record = {
+                "type": "project_state",
+                "timestamp": timestamp,
+                "task_id": task_id,
+                "suggested_next_step": suggested_next_step,
+            }
+            self._append([record])
+            self._trim()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -223,20 +261,27 @@ class WorkspaceStore:
         """Enforce retention limits, rewriting the store only when over limit."""
         try:
             records = self._load()
-            summaries = [r for r in records if r.get("type") == "task_summary"]
-            artifacts = [r for r in records if r.get("type") == "artifact"]
+            summaries     = [r for r in records if r.get("type") == "task_summary"]
+            artifacts     = [r for r in records if r.get("type") == "artifact"]
+            project_states = [r for r in records if r.get("type") == "project_state"]
             other = [
                 r for r in records
-                if r.get("type") not in ("task_summary", "artifact")
+                if r.get("type") not in ("task_summary", "artifact", "project_state")
             ]
 
             if (
-                len(summaries) <= MAX_TASK_SUMMARIES
-                and len(artifacts) <= MAX_ARTIFACT_RECORDS
+                len(summaries)      <= MAX_TASK_SUMMARIES
+                and len(artifacts)  <= MAX_ARTIFACT_RECORDS
+                and len(project_states) <= MAX_PROJECT_STATE_RECORDS
             ):
                 return
 
-            kept = other + summaries[-MAX_TASK_SUMMARIES:] + artifacts[-MAX_ARTIFACT_RECORDS:]
+            kept = (
+                other
+                + summaries[-MAX_TASK_SUMMARIES:]
+                + artifacts[-MAX_ARTIFACT_RECORDS:]
+                + project_states[-MAX_PROJECT_STATE_RECORDS:]
+            )
             with open(self._store_path, "w", encoding="utf-8") as f:
                 for record in kept:
                     f.write(json.dumps(record) + "\n")

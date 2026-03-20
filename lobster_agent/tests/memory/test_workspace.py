@@ -12,6 +12,7 @@ import pytest
 from app.memory.workspace import (
     MAX_ARTIFACT_RECORDS,
     MAX_CONTEXT_CHARS,
+    MAX_PROJECT_STATE_RECORDS,
     MAX_TASK_SUMMARIES,
     WorkspaceStore,
 )
@@ -208,6 +209,52 @@ def test_read_context_capped_at_max_chars(tmp_path):
 
     context = store.read_context(max_tasks=10)
     assert len(context) <= MAX_CONTEXT_CHARS
+
+
+# ---------------------------------------------------------------------------
+# project_state — write, read, retention (V3 M2)
+# ---------------------------------------------------------------------------
+
+def test_project_state_appears_in_next_session_context(tmp_path):
+    """After write_project_state(), read_context() includes 'Most recent suggestion:'
+    with the suggestion text — simulating cross-session recall (V3 M2)."""
+    store = WorkspaceStore(str(tmp_path))
+    # Seed a task_summary so the workspace history block is also present
+    store.write_task_summary(_make_result(objective="Summarise the project"))
+    # Write a project_state as a prior research turn would have produced
+    store.write_project_state(
+        task_id="task-abc",
+        suggested_next_step="Extend progress.txt with a V3 completion entry",
+    )
+
+    context = store.read_context()
+    assert "Most recent suggestion:" in context
+    assert "Extend progress.txt with a V3 completion entry" in context
+
+
+def test_project_state_only_one_record_kept(tmp_path):
+    """Writing two project_state records retains only the last one (MAX = 1)."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_task_summary(_make_result())
+    store.write_project_state(task_id="t1", suggested_next_step="First suggestion")
+    store.write_project_state(task_id="t2", suggested_next_step="Second suggestion")
+
+    context = store.read_context()
+    assert "Second suggestion" in context
+    assert "First suggestion" not in context
+
+    records = store._load()
+    ps = [r for r in records if r.get("type") == "project_state"]
+    assert len(ps) == MAX_PROJECT_STATE_RECORDS
+
+
+def test_no_project_state_no_suggestion_line(tmp_path):
+    """When no project_state has been written, 'Most recent suggestion:' is absent."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_task_summary(_make_result(objective="Create hello.txt"))
+
+    context = store.read_context()
+    assert "Most recent suggestion:" not in context
 
 
 if __name__ == "__main__":

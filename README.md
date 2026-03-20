@@ -122,10 +122,59 @@ context.
 | Task summaries (objective, status, verdict) | File contents |
 | Artifact paths and operation type | API keys or credentials |
 | Timestamps | Raw conversation messages |
-| | Data from paths outside `project_root` |
+| Most recent `suggested_next_step` (project_state) | Data from paths outside `project_root` |
 
 The store is human-readable. Delete `<project_root>/.lobster/workspace_memory.jsonl`
 to reset memory for that workspace; nothing else is affected.
+
+---
+
+## V3 Capabilities (Project-state awareness)
+
+V3 gives the agent forward-looking reasoning: it can suggest a concrete next
+step and remember what it previously recommended across sessions.
+
+**M1 — Next-step synthesis**
+
+- Research synthesis produces a `suggested_next_step` for progress/state/next-step
+  queries; `None` for factual queries
+- Suggestion is artifact-targeted (names a specific file + action), grounded in
+  evidence from the same response, and one sentence maximum
+- Appears in the final response as `"Suggested next step: ..."` — clearly labelled
+
+**M2 — Project state persistence**
+
+- After any research turn that produced a suggestion, a `project_state` record is
+  written to the workspace store
+- `read_context()` injects `"Most recent suggestion: ... (YYYY-MM-DD)"` into the
+  next session's context block — one record, no accumulation
+- Cross-session recall: "What did you recommend last time?" reads the stored
+  suggestion directly rather than re-synthesising
+
+**V3 demo transcript** (live-validated 2026-03-20):
+
+```
+Session 1 — new thread
+  > "What should I do next to make progress on this project?"
+  status: success  task_type: research  confidence: 0.65
+  suggested_next_step: "Extend progress.txt with a detailed section
+    outlining V3 M2 objectives, dependencies, and estimated timeline"
+  project_state record written to .lobster/workspace_memory.jsonl
+
+Session 2 — new thread
+  > "What did you recommend last time?"
+  workspace_context carries:
+    "Most recent suggestion: Extend progress.txt with a detailed section
+     outlining V3 M2 objectives... (2026-03-20)"
+  status: success  task_type: research  confidence: 0.95  ← stored record
+  evidence: "The suggested next step from that research task was: 'Extend
+    progress.txt with a detailed section...'"  ← quoted verbatim from store
+```
+
+Key V3 properties:
+- Session 2 confidence rises from 0.65 → 0.95: stored record removes uncertainty
+- Open questions narrow from "what should we do?" to "how exactly do we do it?"
+- Response references stored suggestion, not a re-synthesised recommendation
 
 ---
 
@@ -222,7 +271,7 @@ cd lobster_agent
 pytest tests/ -q
 ```
 
-173 tests, no external dependencies required.
+179 tests, no external dependencies required.
 
 ---
 
@@ -246,7 +295,9 @@ lobster_agent/
 ├── scripts/
 │   ├── validate_live.py        # V1 live validation — 6 workflow scenarios
 │   ├── validate_m2_ollama.py   # M2 cross-model robustness check (Ollama)
-│   └── validate_m3_live.py     # M3 live validation — 3-session demo
+│   ├── validate_m3_live.py     # V2 M3 live validation — 3-session demo
+│   ├── validate_v3m1_live.py   # V3 M1 live validation — suggestion quality
+│   └── validate_v3m2_live.py   # V3 M2 live validation — cross-session recall
 └── tests/
     ├── graphs/                 # Subgraph and integration tests
     └── memory/                 # WorkspaceStore unit tests
@@ -260,8 +311,8 @@ lobster_agent/
   requests, no API calls from within execution
 - **Retrieval**: local file walk only — no HTTP sources
 - **File writes**: full overwrite only — no append semantics
-- **Workspace memory**: task summaries and artifact paths only — no preference
-  detection, no next-step reasoning (planned V3)
+- **Workspace memory**: task summaries, artifact paths, and most recent suggestion —
+  no preference detection (not yet implemented)
 - **Memory inspection**: no CLI command to view or clear workspace memory —
   inspect via `<project_root>/.lobster/workspace_memory.jsonl` directly
 - **Output**: blocking, synchronous — no streaming
@@ -275,4 +326,4 @@ lobster_agent/
 - [LangGraph](https://github.com/langchain-ai/langgraph) — graph orchestration and checkpointing
 - [Anthropic API](https://docs.anthropic.com) — `claude-haiku-4-5-20251001` for all LLM calls
 - SQLite — conversation thread persistence via LangGraph MemorySaver
-- pytest — 173 unit and integration tests
+- pytest — 179 unit and integration tests

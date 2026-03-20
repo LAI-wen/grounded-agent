@@ -89,13 +89,23 @@ Your output must include:
 2. Citations (which source supports each claim)
 3. Overall confidence (0.0-1.0 based on source agreement and quality)
 4. Open questions (what remains unclear or needs further research)
+5. Suggested next step (see rules below)
+
+Suggested next step rules:
+- Populate ONLY when the query is about project state, progress, or what to do next
+  (e.g. "what should I do next?", "summarise the project", "what's the status?")
+- Return null for factual queries (e.g. "what does X function do?", "find files about Y")
+- When populated: name one specific artifact and one specific action verb (e.g. "Extend
+  notes.txt with a section on X"); one sentence maximum; must be traceable to evidence
+- Return null when evidence is insufficient to make a concrete recommendation
 
 Return ONLY a JSON object with this structure:
 {
   "evidence": ["claim 1", "claim 2", ...],
   "citations": ["Source Title 1", "Source Title 2", ...],
   "confidence": 0.75,
-  "open_questions": ["question 1", ...]
+  "open_questions": ["question 1", ...],
+  "suggested_next_step": "Extend notes.txt with a section on X" | null
 }"""
 
 SYNTHESIZE_EVIDENCE_USER_PROMPT = """Research query: {normalized_query}

@@ -48,6 +48,7 @@ class ResearchResult(TypedDict):
     citations: list[str]
     confidence: float  # 0.0-1.0
     open_questions: list[str]
+    suggested_next_step: Optional[str]  # V3 M1: concrete artifact-targeted suggestion; None when not applicable
 
 
 class ExecutionResult(TypedDict):

@@ -50,6 +50,7 @@ def invoke_research_subgraph(state: MainState) -> MainState:
             "citations": list(source.get("title", "Unknown") for source in research_output.get("filtered_sources", [])),
             "confidence": research_output["confidence"],
             "open_questions": research_output["open_questions"],
+            "suggested_next_step": research_output.get("suggested_next_step"),
         }
 
         # Create success trace entry

@@ -142,6 +142,7 @@ def synthesize_evidence(state: ResearchState) -> ResearchState:
         citations = synthesis_result.get("citations", [])
         confidence = float(synthesis_result.get("confidence", 0.5))
         open_questions = synthesis_result.get("open_questions", [])
+        suggested_next_step = synthesis_result.get("suggested_next_step") or None
 
         # Ensure confidence is in valid range
         confidence = max(0.0, min(1.0, confidence))
@@ -152,6 +153,7 @@ def synthesize_evidence(state: ResearchState) -> ResearchState:
             "citations": citations,
             "confidence": confidence,
             "open_questions": open_questions,
+            "suggested_next_step": suggested_next_step,
             "logs": [
                 *state.get("logs", []),
                 source_log,

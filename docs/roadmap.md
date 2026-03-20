@@ -188,110 +188,95 @@ Session 3: "Summarise what this project has done so far"
 **Theme**: The agent understands the current state of a project and can suggest
 what to do next, grounded in both file content and workspace history.
 
-**V2 leaves this gap:** after three milestones the agent can synthesise evidence
-from multiple sources, but every answer is retrospective — it describes what has
-been done. It has no ability to reason forward: "given what I know, here is a
-concrete next step." Users who ask "what should I do next?" receive a general
-research response, not an actionable recommendation.
-
-**V3 closes that gap** at the prompt level, without new infrastructure.
+**Status**: Complete. 179 tests passing. Live-validated 2026-03-20.
 
 ---
 
-### Milestone 1 — Next-step synthesis — *Not yet started*
+### Milestone 1 — Next-step synthesis — **Complete**
 
-**Problem M3.1 addresses:**
+**Status**: Complete. 176 tests passing. Live-validated 2026-03-20.
 
-Research synthesis produces `evidence`, `citations`, `confidence`, and
-`open_questions`. When the query is about project state or progress, the model
-has all the information needed to suggest a next step — but there is no field
-for it in the output and no instruction to produce one. The result is that
-`open_questions` lists what is unknown but nothing surfaces what to *do* about it.
+**What M1 delivers:**
 
-**Planned deliverables:**
+- `app/graphs/research/state.py` — `suggested_next_step: Optional[str]` added to `ResearchState`
+- `app/graphs/main/state.py` — `suggested_next_step: Optional[str]` added to `ResearchResult`
+- `app/graphs/research/prompts/templates.py` — synthesis prompt extended with trigger
+  condition (progress/state/next-step queries only), concreteness rules (artifact-targeted,
+  one sentence, grounded in evidence), and `suggested_next_step` in JSON schema
+- `app/graphs/research/nodes/synthesize_evidence.py` — extracts and passes through
+  `suggested_next_step` from LLM response
+- `app/graphs/main/wrappers.py` — maps field into `ResearchResult`
+- `app/graphs/main/nodes.py` — `_compose_response` appends `"Suggested next step: ..."`
+  when present; absent for factual queries
+- 3 new tests: suggestion present for progress query, null for factual query,
+  rendering in final response
 
-1. `app/graphs/main/state.py` — add `suggested_next_step: Optional[str]` to
-   `ResearchResult`. Populated only when the synthesis has sufficient evidence
-   to make a concrete recommendation; `None` otherwise.
+**Live demo result:**
 
-2. `app/graphs/research/prompts/templates.py` — extend
-   `SYNTHESIZE_EVIDENCE_SYSTEM_PROMPT` to instruct the model to produce a
-   `suggested_next_step` in the JSON output when the query is about project
-   state, progress, or "what's next". The instruction should be:
-   - grounded in evidence (not generic advice)
-   - concrete and actionable (a specific task, not a vague direction)
-   - absent (`null`) when evidence is insufficient to suggest anything specific
+```
+Query A (project-state): "Summarise the current state of this project."
+  → suggested_next_step: "Extend progress.txt with details on the next-step
+    synthesis implementation plan and live validation requirements."
+  → grounded in evidence; not generic; appears in final response
 
-3. `app/graphs/research/nodes/synthesize_evidence.py` — extract and pass through
-   `suggested_next_step` from the LLM response.
+Query B (next-step): "What should I do next to make progress on this project?"
+  → suggested_next_step: "Extend progress.txt with the live validation
+    requirements and detailed next-step synthesis implementation plan to
+    unblock the pending validation phase."
 
-4. `app/graphs/main/nodes.py` — `_compose_response` appends the suggestion to
-   the response when present:
-   `"Suggested next step: <suggestion>"` — clearly labelled, at the end.
-
-5. Tests — one targeted test: when synthesis returns a `suggested_next_step`,
-   it appears in the final response.
-
-**Scope boundary:** no new graph nodes, no new WorkspaceStore record types, no
-new tools. The suggestion is produced by the existing synthesis LLM call — not
-a separate step. Changes to four files maximum.
-
-**Why M1 before any tool expansion:** next-step reasoning is the highest-value
-addition the agent can make with its current knowledge. It requires no new data
-sources — the synthesis already has all the inputs it needs. Adding it before
-expanding the tool surface ensures V3 is grounded in the current architecture
-rather than in new infrastructure.
-
-**Acceptance criterion:**
-
-After two sessions (create files, append content), a third session asking
-"What should I do next to make progress on this project?" produces a response
-that names a specific artifact or task, not generic advice like "continue
-documenting". The suggestion must be traceable to evidence in the response.
+Query C (factual): "How does the safety check in this project work?"
+  → suggested_next_step: None  ← correctly absent
+  → "Suggested next step:" not in response
+```
 
 ---
 
-### Milestone 2 — Project state persistence — *Not yet started*
+### Milestone 2 — Project state persistence — **Complete**
 
-After M1, the agent can suggest a next step but cannot remember what it
-previously suggested. Repeated "what's next?" queries synthesise from scratch
-each time, producing potentially inconsistent recommendations across sessions.
+**Status**: Complete. 179 tests passing. Live-validated 2026-03-20.
 
-**Problem:** there is no durable record of the agent's own forward-looking
-reasoning — only retrospective task records. A user who acted on a suggestion
-in Session 2 has no way to ask "what was the last thing you recommended?" in
-Session 3.
+**What M2 delivers:**
 
-**Planned deliverables:**
+- `app/memory/workspace.py` — new record type `project_state`; `write_project_state()`
+  method; `read_context()` appends `"Most recent suggestion: ... (YYYY-MM-DD)"` when
+  a record is present; `_trim()` enforces `MAX_PROJECT_STATE_RECORDS = 1`
+- `app/main.py` — calls `write_project_state()` after any research turn where
+  `suggested_next_step` is non-None
+- 3 new tests: cross-session recall, last-1 retention, absent when no record written
 
-1. `app/memory/workspace.py` — new record type `project_state`:
-   ```json
-   {
-     "type": "project_state",
-     "timestamp": "...",
-     "task_id": "...",
-     "state_summary": "...",
-     "suggested_next_step": "...",
-     "source_task_ids": ["..."]
-   }
-   ```
-   Written after a research turn that produced a `suggested_next_step`.
+**Record shape:**
+```json
+{
+  "type": "project_state",
+  "timestamp": "2026-03-20T12:18:17Z",
+  "task_id": "...",
+  "suggested_next_step": "Extend progress.txt with a detailed section outlining V3 M2 objectives..."
+}
+```
 
-2. `WorkspaceStore.read_context()` — include the most recent `project_state`
-   record in the injected context block.
+**`read_context()` rendering:**
+```
+Workspace history (recent tasks):
+- [2026-03-20] research: "What should I do next..." → success
+Most recent suggestion: Extend progress.txt with a detailed section... (2026-03-20)
+```
 
-3. Tests — one targeted test: after a research turn with a suggestion, the
-   project_state record is readable from the store in the next session's context.
+**Live demo result:**
 
-**Scope boundary:** no graph changes, no prompt changes beyond what M1 already
-added. Only `workspace.py` and `WorkspaceStore` unit tests.
+```
+Session 1: "What should I do next to make progress on this project?"
+  → suggestion produced, project_state record written, confidence: 0.65
 
----
+Session 2 (new thread): "What did you recommend last time?"
+  → workspace_context carries: "Most recent suggestion: Extend progress.txt
+    with a detailed section outlining V3 M2 objectives... (2026-03-20)"
+  → evidence claim quotes stored suggestion verbatim
+  → confidence: 0.95  ← stored record removes re-synthesis uncertainty
+  → response references stored suggestion, not a new recommendation
+```
 
-### Milestone 3 and beyond — *Not yet scoped*
-
-Potential themes after M1 and M2 are stable:
-
-- HTTP retrieval (web search adapter for research)
-- Preference detection and recall across sessions
-- Broader tool set (evaluated after V3 M1/M2 learnings)
+**Observable difference vs pre-M2:** before M2, "what did you recommend last
+time?" would re-synthesise from file sources only with no record of a prior
+recommendation. After M2, the stored suggestion appears directly in evidence,
+confidence rises from 0.65 to 0.95, and open questions narrow from
+"what should we do?" to "how exactly should we do it?"

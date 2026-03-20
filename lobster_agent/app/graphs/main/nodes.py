@@ -354,6 +354,9 @@ def _compose_response(review_result, execution_result, research_result) -> str:
             lines.append("\nOpen questions:")
             for q in open_q:
                 lines.append(f"  - {q}")
+        suggested = research_result.get("suggested_next_step")
+        if suggested:
+            lines.append(f"\nSuggested next step: {suggested}")
         return "\n".join(lines) if lines else "Research completed."
 
     return "Task completed. No results available."

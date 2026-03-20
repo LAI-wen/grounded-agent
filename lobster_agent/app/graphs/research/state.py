@@ -71,5 +71,8 @@ class ResearchState(TypedDict):
     confidence: float  # 0.0-1.0
     open_questions: list[str]
 
+    # Forward-looking reasoning (V3 M1)
+    suggested_next_step: Optional[str]  # Concrete artifact-targeted suggestion; None when not applicable
+
     # Internal logs
     logs: list[str]

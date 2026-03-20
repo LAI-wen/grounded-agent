@@ -43,6 +43,7 @@ def create_test_state(**overrides) -> ResearchState:
         "summary": "",
         "confidence": 0.0,
         "open_questions": [],
+        "suggested_next_step": None,
         "logs": [],
     }
     defaults.update(overrides)
@@ -404,6 +405,82 @@ def test_synthesize_evidence_both_sources_present_in_prompt():
     # Log must identify the combined-source path
     assert any("combined" in log for log in result["logs"]), \
         "expected combined-source log entry"
+
+
+def test_suggested_next_step_for_progress_query():
+    """When LLM returns a suggested_next_step for a progress query, it flows through
+    to the result (V3 M1 behaviour)."""
+    import json as json_module
+
+    llm_response = {
+        "evidence": ["notes.txt was created on 2026-03-20"],
+        "citations": ["workspace history"],
+        "confidence": 0.8,
+        "open_questions": [],
+        "suggested_next_step": "Extend notes.txt with a summary of V3 M1 completion",
+    }
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    state = create_test_state(
+        filtered_sources=[{"title": "notes.txt", "content": "Project started.", "reliability_score": 0.8, "metadata": {}}],
+        research_query="What should I do next to make progress on this project?",
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+            result = synthesize_evidence(state)
+
+    assert result["suggested_next_step"] == "Extend notes.txt with a summary of V3 M1 completion"
+
+
+def test_suggested_next_step_null_for_factual_query():
+    """When LLM returns null for suggested_next_step (factual query), result is None."""
+    import json as json_module
+
+    llm_response = {
+        "evidence": ["The safety check function rejects path traversal"],
+        "citations": ["safety.py"],
+        "confidence": 0.9,
+        "open_questions": [],
+        "suggested_next_step": None,
+    }
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    state = create_test_state(
+        filtered_sources=[{"title": "safety.py", "content": "def safety_check():", "reliability_score": 0.9, "metadata": {}}],
+        research_query="How does the safety check work?",
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+            result = synthesize_evidence(state)
+
+    assert result["suggested_next_step"] is None
+
+
+def test_suggested_next_step_in_final_response():
+    """When research_result contains a suggested_next_step, _compose_response includes it."""
+    from app.graphs.main.nodes import _compose_response
+
+    research_result = {
+        "summary": "The project has created notes.txt.",
+        "evidence": ["notes.txt was created"],
+        "citations": ["workspace history"],
+        "confidence": 0.8,
+        "open_questions": [],
+        "suggested_next_step": "Extend notes.txt with a V3 progress entry",
+    }
+
+    response = _compose_response(None, None, research_result)
+
+    assert "Suggested next step:" in response
+    assert "Extend notes.txt with a V3 progress entry" in response
 
 
 # ===== finalize_research tests =====
