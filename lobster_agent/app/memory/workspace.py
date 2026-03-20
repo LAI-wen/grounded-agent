@@ -3,9 +3,11 @@
 Persists a compact record of completed tasks per project directory.
 Store location: <project_root>/.lobster/workspace_memory.jsonl
 
-Format: append-only JSON lines. Two record types:
-  - task_summary: one per successfully completed task
-  - artifact:     one per file written during that task
+Format: append-only JSON lines. Record types:
+  - task_summary:  one per successfully completed task
+  - artifact:      one per file written during that task
+  - project_state: most recent suggested_next_step (last 1)
+  - preference:    explicit user preference per key (last 1 per key)
 
 Design constraints:
   - Only written when status == "success" or review verdict == "pass"
@@ -28,6 +30,11 @@ MAX_TASK_SUMMARIES = 50
 MAX_ARTIFACT_RECORDS = 100
 MAX_PROJECT_STATE_RECORDS = 1   # Only the most recent suggestion is ever useful
 MAX_CONTEXT_CHARS = 1500
+
+# Preference retention: one active record per key.
+# The set of known keys drives trim logic; add new keys here as new
+# preference types are introduced.
+_PREFERENCE_KEYS = frozenset({"response_length"})
 
 
 class WorkspaceStore:
@@ -55,17 +62,20 @@ class WorkspaceStore:
           Workspace history (recent tasks):
           - [YYYY-MM-DD] task_type: "objective" → status[, artifacts: [...]]
           Most recent suggestion: <text> (YYYY-MM-DD)
+          User preferences (apply to this response):
+            - Keep responses concise (set YYYY-MM-DD)
         """
         try:
             records = self._load()
         except Exception:
             return ""
 
-        summaries = [r for r in records if r.get("type") == "task_summary"]
+        summaries      = [r for r in records if r.get("type") == "task_summary"]
         project_states = [r for r in records if r.get("type") == "project_state"]
-        recent = summaries[-max_tasks:]
+        preferences    = [r for r in records if r.get("type") == "preference"]
+        recent         = summaries[-max_tasks:]
 
-        if not recent and not project_states:
+        if not recent and not project_states and not preferences:
             return ""
 
         parts = []
@@ -73,10 +83,10 @@ class WorkspaceStore:
         if recent:
             task_lines = []
             for r in recent:
-                ts = r.get("timestamp", "")[:10]          # date only
+                ts        = r.get("timestamp", "")[:10]
                 task_type = r.get("task_type", "?")
                 objective = r.get("objective", "")[:80]
-                status = r.get("status", "?")
+                status    = r.get("status", "?")
                 artifacts = r.get("artifacts", [])
                 artifact_str = (
                     f", artifacts: [{', '.join(artifacts)}]" if artifacts else ""
@@ -87,11 +97,35 @@ class WorkspaceStore:
             parts.append("Workspace history (recent tasks):\n" + "\n".join(task_lines))
 
         if project_states:
-            latest = project_states[-1]
-            ts = latest.get("timestamp", "")[:10]
+            latest     = project_states[-1]
+            ts         = latest.get("timestamp", "")[:10]
             suggestion = latest.get("suggested_next_step", "")
             if suggestion:
                 parts.append(f"Most recent suggestion: {suggestion} ({ts})")
+
+        # Active preference per key: last record wins (file is append-only,
+        # so iterating forward gives us the most recent record for each key).
+        active_prefs: dict = {}
+        for r in preferences:
+            key = r.get("key", "")
+            if key:
+                active_prefs[key] = r
+
+        if active_prefs:
+            pref_lines = []
+            for key, r in active_prefs.items():
+                ts  = r.get("timestamp", "")[:10]
+                val = r.get("value", "")
+                if key == "response_length":
+                    if val == "concise":
+                        pref_lines.append(f"  - Keep responses concise (set {ts})")
+                    elif val == "detailed":
+                        pref_lines.append(f"  - Provide detailed responses (set {ts})")
+            if pref_lines:
+                parts.append(
+                    "User preferences (apply to this response):\n"
+                    + "\n".join(pref_lines)
+                )
 
         block = "\n" + "\n".join(parts)
 
@@ -172,6 +206,33 @@ class WorkspaceStore:
                 "timestamp": timestamp,
                 "task_id": task_id,
                 "suggested_next_step": suggested_next_step,
+            }
+            self._append([record])
+            self._trim()
+        except Exception:
+            pass
+
+    def write_preference(
+        self,
+        task_id: str,
+        key: str,
+        value: str,
+        trigger_phrase: str,
+    ) -> None:
+        """Append a preference record for an explicitly expressed user preference.
+
+        Retention: last 1 active record per key (_trim enforces this).
+        trigger_phrase is stored so the user can audit why a preference was set.
+        Silently no-ops on any error — memory is never load-bearing.
+        """
+        try:
+            record = {
+                "type":           "preference",
+                "timestamp":      datetime.now(timezone.utc).isoformat(),
+                "task_id":        task_id,
+                "key":            key,
+                "value":          value,
+                "trigger_phrase": trigger_phrase,
             }
             self._append([record])
             self._trim()
@@ -260,19 +321,32 @@ class WorkspaceStore:
     def _trim(self) -> None:
         """Enforce retention limits, rewriting the store only when over limit."""
         try:
-            records = self._load()
-            summaries     = [r for r in records if r.get("type") == "task_summary"]
-            artifacts     = [r for r in records if r.get("type") == "artifact"]
+            records        = self._load()
+            summaries      = [r for r in records if r.get("type") == "task_summary"]
+            artifacts      = [r for r in records if r.get("type") == "artifact"]
             project_states = [r for r in records if r.get("type") == "project_state"]
-            other = [
+            preferences    = [r for r in records if r.get("type") == "preference"]
+            other          = [
                 r for r in records
-                if r.get("type") not in ("task_summary", "artifact", "project_state")
+                if r.get("type") not in (
+                    "task_summary", "artifact", "project_state", "preference"
+                )
             ]
+
+            # Active preference per key: last record wins.
+            # Iterate forward so later records overwrite earlier ones.
+            active_prefs: dict = {}
+            for r in preferences:
+                key = r.get("key", "")
+                if key:
+                    active_prefs[key] = r
+            prefs_kept = list(active_prefs.values())
 
             if (
                 len(summaries)      <= MAX_TASK_SUMMARIES
                 and len(artifacts)  <= MAX_ARTIFACT_RECORDS
                 and len(project_states) <= MAX_PROJECT_STATE_RECORDS
+                and len(preferences) == len(prefs_kept)
             ):
                 return
 
@@ -281,6 +355,7 @@ class WorkspaceStore:
                 + summaries[-MAX_TASK_SUMMARIES:]
                 + artifacts[-MAX_ARTIFACT_RECORDS:]
                 + project_states[-MAX_PROJECT_STATE_RECORDS:]
+                + prefs_kept
             )
             with open(self._store_path, "w", encoding="utf-8") as f:
                 for record in kept:

@@ -22,7 +22,7 @@ ANTHROPIC_API_KEY=sk-... python3 -m app.cli --thread-id my-session
 ## Run Tests
 
 ```bash
-pytest tests/ -q              # all 191 tests, no API key needed
+pytest tests/ -q              # all 221 tests, no API key needed
 pytest tests/ -v              # verbose output
 pytest tests/graphs/test_main.py -v   # specific module
 ```

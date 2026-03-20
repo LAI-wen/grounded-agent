@@ -257,5 +257,101 @@ def test_no_project_state_no_suggestion_line(tmp_path):
     assert "Most recent suggestion:" not in context
 
 
+# ---------------------------------------------------------------------------
+# Preference tests (P1)
+# ---------------------------------------------------------------------------
+
+def test_write_preference_stores_record(tmp_path):
+    """write_preference appends a preference record to the store."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_preference(
+        task_id="t1",
+        key="response_length",
+        value="concise",
+        trigger_phrase="too long",
+    )
+
+    records = store._load()
+    prefs = [r for r in records if r.get("type") == "preference"]
+    assert len(prefs) == 1
+    p = prefs[0]
+    assert p["key"]            == "response_length"
+    assert p["value"]          == "concise"
+    assert p["trigger_phrase"] == "too long"
+    assert p["task_id"]        == "t1"
+    assert "timestamp" in p
+
+
+def test_preference_last_record_per_key_wins(tmp_path):
+    """Writing two records for the same key keeps only the most recent after trim."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_preference("t1", "response_length", "concise",  "too long")
+    store.write_preference("t2", "response_length", "detailed", "more detail")
+
+    records = store._load()
+    prefs = [r for r in records if r.get("type") == "preference"]
+    assert len(prefs) == 1
+    assert prefs[0]["value"] == "detailed"
+
+
+def test_read_context_renders_active_preference(tmp_path):
+    """Active preference appears in the workspace_context block."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_preference("t1", "response_length", "concise", "too long")
+
+    context = store.read_context()
+    assert "User preferences" in context
+    assert "Keep responses concise" in context
+
+
+def test_read_context_renders_detailed_preference(tmp_path):
+    """'detailed' value renders as 'Provide detailed responses'."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_preference("t1", "response_length", "detailed", "more detail")
+
+    context = store.read_context()
+    assert "Provide detailed responses" in context
+
+
+def test_read_context_preference_includes_timestamp(tmp_path):
+    """Rendered preference line includes the 'set YYYY-MM-DD' timestamp."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_preference("t1", "response_length", "concise", "be brief")
+
+    context = store.read_context()
+    assert "set 20" in context   # "set 2026-..." present
+
+
+def test_read_context_no_preference_block_when_absent(tmp_path):
+    """'User preferences' section is absent when no preference has been written."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_task_summary(_make_result(objective="Create hello.txt"))
+
+    context = store.read_context()
+    assert "User preferences" not in context
+
+
+def test_preference_trim_keeps_last_per_key_across_many_writes(tmp_path):
+    """Writing N records for the same key trims to exactly 1 after each write."""
+    store = WorkspaceStore(str(tmp_path))
+    for i in range(5):
+        store.write_preference("t1", "response_length", "concise", "too long")
+
+    records = store._load()
+    prefs = [r for r in records if r.get("type") == "preference"]
+    assert len(prefs) == 1
+
+
+def test_preference_override_updates_active_value(tmp_path):
+    """A second preference write with a different value changes what is rendered."""
+    store = WorkspaceStore(str(tmp_path))
+    store.write_preference("t1", "response_length", "concise",  "too long")
+    store.write_preference("t2", "response_length", "detailed", "more detail")
+
+    context = store.read_context()
+    assert "Provide detailed responses" in context
+    assert "Keep responses concise"      not in context
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

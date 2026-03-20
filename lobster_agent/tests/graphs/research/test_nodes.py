@@ -256,7 +256,7 @@ def test_synthesize_evidence_with_llm():
             mock_client.messages.create.assert_called_once()
 
             assert len(result["evidence"]) == 2
-            assert result["confidence"] == 0.85
+            assert result["confidence"] == 0.75  # 2 local-only sources → ceiling 0.75
             assert len(result["open_questions"]) == 1
             assert "Synthesized" in result["logs"][-1]  # Verify LLM path was taken, not fallback
 
@@ -321,7 +321,7 @@ def test_synthesize_evidence_workspace_context_bypasses_early_return():
     assert "Workspace history" in prompt_text
     # Result came from LLM
     assert result["evidence"] == ["hello.txt was created in the previous session"]
-    assert result["confidence"] == 0.8
+    assert result["confidence"] == 0.6  # 0 filtered sources → ceiling 0.60
 
 
 def test_synthesize_evidence_workspace_context_in_prompt():
@@ -475,6 +475,302 @@ def test_suggested_next_step_in_final_response():
 
     assert "Suggested next step:" in response
     assert "Extend notes.txt with a V3 progress entry" in response
+
+
+# ===== synthesize_evidence hybrid routing tests =====
+
+def _web_source(title="LangGraph Docs"):
+    return {
+        "url": "https://example.com/doc",
+        "title": title,
+        "content": "LangGraph requires Python 3.9 as the minimum supported version.",
+        "reliability_score": 0.88,
+        "metadata": {"adapter": "web_search", "provider": "tavily", "rank": 1},
+    }
+
+
+def _local_source(title="progress.txt"):
+    return {
+        "url": None,
+        "title": title,
+        "content": "V3 milestone complete. Current focus: V4 external retrieval.",
+        "reliability_score": 0.85,
+        "metadata": {"adapter": "local_file"},
+    }
+
+
+def _mock_synthesis_response(evidence=None, confidence=0.80):
+    import json as _json
+    payload = {
+        "evidence":            evidence or ["LangGraph requires Python 3.9"],
+        "citations":           [],
+        "confidence":          confidence,
+        "open_questions":      [],
+        "suggested_next_step": None,
+    }
+    mock_resp = Mock()
+    mock_resp.content = [Mock(text=_json.dumps(payload))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_resp
+    return mock_client
+
+
+def test_synthesize_evidence_routes_to_local_for_factual_web_query():
+    """Factual query + web source + qwen available → local path; Anthropic not called."""
+    local_client  = _mock_synthesis_response()
+    cloud_client  = Mock()
+
+    state = create_test_state(
+        normalized_query="What Python version does LangGraph require?",
+        filtered_sources=[_local_source(), _web_source()],
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=True):
+            with patch.object(synthesize_evidence_mod, "_OllamaClient", return_value=local_client):
+                with patch.object(synthesize_evidence_mod, "Anthropic", return_value=cloud_client):
+                    result = synthesize_evidence(state)
+
+    local_client.messages.create.assert_called_once()
+    cloud_client.messages.create.assert_not_called()
+    assert any("synthesis: local" in log for log in result["logs"])
+    assert result["evidence"] == ["LangGraph requires Python 3.9"]
+
+
+def test_synthesize_evidence_stays_cloud_for_local_only_sources():
+    """No web sources → cloud path; log records skip reason 'no web sources'."""
+    cloud_client = _mock_synthesis_response()
+
+    state = create_test_state(
+        normalized_query="What Python version does LangGraph require?",
+        filtered_sources=[_local_source()],   # no web_search adapter
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=True):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=cloud_client):
+                result = synthesize_evidence(state)
+
+    cloud_client.messages.create.assert_called_once()
+    assert any("no web sources" in log for log in result["logs"])
+
+
+def test_synthesize_evidence_stays_cloud_for_progress_query_with_web_sources():
+    """Progress/next-step query → cloud path even when web sources are present."""
+    cloud_client = _mock_synthesis_response()
+
+    state = create_test_state(
+        normalized_query="What should I do next to make progress on this project?",
+        filtered_sources=[_local_source(), _web_source()],
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=True):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=cloud_client):
+                result = synthesize_evidence(state)
+
+    cloud_client.messages.create.assert_called_once()
+    assert any("progress query" in log for log in result["logs"])
+
+
+def test_synthesize_evidence_falls_back_to_cloud_on_local_parse_failure():
+    """Invalid JSON from local model → one cloud retry; log records fallback path."""
+    import json as _json
+
+    # Local model returns unparseable text (not valid JSON)
+    bad_local_resp = Mock()
+    bad_local_resp.content = [Mock(text="Sorry, I cannot answer that.")]
+    local_client = Mock()
+    local_client.messages.create.return_value = bad_local_resp
+
+    cloud_client = _mock_synthesis_response(evidence=["LangGraph requires Python 3.9"])
+
+    state = create_test_state(
+        normalized_query="What Python version does LangGraph require?",
+        filtered_sources=[_local_source(), _web_source()],
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=True):
+            with patch.object(synthesize_evidence_mod, "_OllamaClient", return_value=local_client):
+                with patch.object(synthesize_evidence_mod, "Anthropic", return_value=cloud_client):
+                    result = synthesize_evidence(state)
+
+    local_client.messages.create.assert_called_once()
+    cloud_client.messages.create.assert_called_once()
+    assert any("local→cloud fallback" in log for log in result["logs"])
+    assert result["evidence"] == ["LangGraph requires Python 3.9"]
+
+
+def test_synthesize_evidence_concise_preference_in_system_prompt():
+    """When workspace_context contains a 'concise' preference, the system prompt
+    passed to the LLM contains the hard IMPORTANT instruction (not just user context)."""
+    import json as json_module
+
+    llm_response = {
+        "evidence": ["Lobster Agent uses LangGraph"],
+        "citations": ["notes.txt"],
+        "confidence": 0.8,
+        "open_questions": [],
+        "suggested_next_step": None,
+    }
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    workspace_ctx = (
+        "\nUser preferences (apply to this response):\n"
+        "  - Keep responses concise (set 2026-03-20)\n"
+    )
+    source = {"title": "notes.txt", "content": "Lobster Agent project notes.", "reliability_score": 0.8, "metadata": {}}
+    state = create_test_state(
+        filtered_sources=[source],
+        context={"workspace_context": workspace_ctx},
+        normalized_query="Summarise this project.",
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+                synthesize_evidence(state)
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    system_text = call_kwargs["system"]
+    assert "IMPORTANT" in system_text
+    assert "concise" in system_text.lower()
+    # Base system prompt still present
+    assert "research synthesizer" in system_text.lower()
+
+
+def test_synthesize_evidence_no_preference_uses_base_system_prompt():
+    """When no preference is active, the system prompt is the unmodified base prompt."""
+    import json as json_module
+
+    llm_response = {"evidence": ["claim"], "citations": [], "confidence": 0.7, "open_questions": []}
+    mock_response = Mock()
+    mock_response.content = [Mock(text=json_module.dumps(llm_response))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_response
+
+    source = {"title": "doc.txt", "content": "content", "reliability_score": 0.7, "metadata": {}}
+    state = create_test_state(
+        filtered_sources=[source],
+        context={},
+        normalized_query="What is X?",
+    )
+
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=mock_client):
+                synthesize_evidence(state)
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    system_text = call_kwargs["system"]
+    # ceiling instruction added for 1 source; no preference instruction
+    assert "Keep responses concise" not in system_text
+    assert "Give detailed responses" not in system_text
+
+
+# ===== confidence over-claim guard tests =====
+
+def _make_high_conf_client(confidence=0.99):
+    """Mock client that always returns confidence=0.99 (over-claiming model)."""
+    import json as _json
+    payload = {
+        "evidence":            ["claim"],
+        "citations":           [],
+        "confidence":          confidence,
+        "open_questions":      [],
+        "suggested_next_step": None,
+    }
+    mock_resp = Mock()
+    mock_resp.content = [Mock(text=_json.dumps(payload))]
+    mock_client = Mock()
+    mock_client.messages.create.return_value = mock_resp
+    return mock_client
+
+
+def test_confidence_ceiling_1_source_clamps_to_0_60():
+    """1-source synthesis: model confidence 0.99 is clamped to 0.60."""
+    client = _make_high_conf_client(confidence=0.99)
+    state = create_test_state(
+        filtered_sources=[_local_source()],
+        normalized_query="What is X?",
+    )
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=client):
+                result = synthesize_evidence(state)
+
+    assert result["confidence"] == 0.60
+    assert any("confidence over-claim guard" in log for log in result["logs"])
+    assert any("<=1 source" in log for log in result["logs"])
+
+
+def test_confidence_ceiling_2_3_local_only_clamps_to_0_75():
+    """2 local-only sources: model confidence 0.99 is clamped to 0.75."""
+    client = _make_high_conf_client(confidence=0.99)
+    state = create_test_state(
+        filtered_sources=[_local_source("a.txt"), _local_source("b.txt")],
+        normalized_query="What is X?",
+    )
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=client):
+                result = synthesize_evidence(state)
+
+    assert result["confidence"] == 0.75
+    assert any("2-3 local-only" in log for log in result["logs"])
+
+
+def test_confidence_ceiling_2_3_with_web_clamps_to_0_80():
+    """2 sources including a web source: model confidence 0.99 is clamped to 0.80."""
+    client = _make_high_conf_client(confidence=0.99)
+    state = create_test_state(
+        filtered_sources=[_local_source(), _web_source()],
+        normalized_query="What is X?",
+    )
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=client):
+                result = synthesize_evidence(state)
+
+    assert result["confidence"] == 0.80
+    assert any("2-3 sources with web" in log for log in result["logs"])
+
+
+def test_confidence_ceiling_4_plus_sources_unchanged():
+    """4+ sources: no ceiling applied; model confidence preserved."""
+    client = _make_high_conf_client(confidence=0.99)
+    sources = [_local_source(f"file{i}.txt") for i in range(4)]
+    state = create_test_state(
+        filtered_sources=sources,
+        normalized_query="What is X?",
+    )
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=client):
+                result = synthesize_evidence(state)
+
+    assert result["confidence"] == 0.99
+    assert not any("confidence over-claim guard" in log for log in result["logs"])
+
+
+def test_confidence_ceiling_no_clamp_when_model_already_below():
+    """Model returns 0.50 against a 1-source ceiling of 0.60 — no clamp, no log entry."""
+    client = _make_high_conf_client(confidence=0.50)
+    state = create_test_state(
+        filtered_sources=[_local_source()],
+        normalized_query="What is X?",
+    )
+    with patch.object(synthesize_evidence_mod.os.environ, "get", return_value="test-key"):
+        with patch.object(synthesize_evidence_mod, "_qwen_available", return_value=False):
+            with patch.object(synthesize_evidence_mod, "Anthropic", return_value=client):
+                result = synthesize_evidence(state)
+
+    assert result["confidence"] == 0.50
+    assert not any("confidence over-claim guard" in log for log in result["logs"])
 
 
 # ===== finalize_research tests =====

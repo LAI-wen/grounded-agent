@@ -235,6 +235,62 @@ No additional Python dependencies — Tavily is called via `requests` (already i
 
 ---
 
+## Preference Memory (response_length — complete + cloud validated)
+
+The agent detects explicit user preferences from conversation messages and
+persists them to the workspace store. Active preferences are injected into
+the synthesis system prompt as a hard instruction, producing measurable
+changes in response length.
+
+**First slice: `response_length`**
+
+| Trigger phrases | Stored value |
+|---|---|
+| "too long", "be more concise", "shorter please", "keep it brief", … | `concise` |
+| "more detail", "expand on that", "not enough detail", "elaborate please", … | `detailed` |
+
+Detection rules:
+- Keyword whitelist only — no inference from implicit signals
+- Double-quoted strings, backtick strings, and `>` block-quote lines are stripped before scanning (quote guard prevents detecting referenced phrases as preferences)
+- Only stored on `status == "success"` turns — error messages never register as preferences
+- Last-record-per-key retention: a new `response_length` preference overwrites the previous one
+
+**Injection design (two layers)**
+
+The preference is delivered at two levels so that it is both visible and enforced:
+
+1. `workspace_context` carries a labelled block so the preference is visible in conversation history:
+   ```
+   User preferences (apply to this response):
+     - Keep responses concise (set 2026-03-20)
+   ```
+2. `SYNTHESIZE_EVIDENCE_SYSTEM_PROMPT` receives an explicit, bounded hard instruction appended at synthesis time (via `_extract_response_length_pref` in `synthesize_evidence.py`):
+   ```
+   IMPORTANT: The user has requested concise responses.
+   Hard limits: return at most 3 evidence claims; each claim must be 12 words or fewer.
+   Prefer short noun phrases over full sentences.
+   ```
+
+**Design principle**: vague framing ("be concise", "use brief sentences") is insufficient — Claude Haiku treats it as stylistic context and may produce longer responses anyway when source material is richer. An explicit per-item word count bound is required to produce consistent, measurable behavioral change across varying context volumes.
+
+**What is validated**
+
+- Detection fires on trigger phrases; quote guard and status gate confirmed
+- Preference record written to `.lobster/workspace_memory.jsonl` with `trigger_phrase` for auditability
+- Last-1 retention enforced after each write
+- `read_context()` renders active preference with date; text confirmed present at model boundary
+- Cloud behavioral (Claude Haiku, three-turn): **6/6 checks passed** (2026-03-20)
+  - 52 → 26 words (+50% reduction), evidence items 4 → 3, 7 core keywords preserved
+
+```bash
+ANTHROPIC_API_KEY=sk-... python3 scripts/validate_preference_cloud.py
+```
+
+**Deferred**: `show_citations` preference key — may affect response rendering beyond
+`synthesize_evidence`; kept out of first slice until the end-to-end path is confirmed.
+
+---
+
 ## Validated Workflows
 
 All six V1 scenarios pass live validation (`lobster_agent/scripts/validate_live.py`):
@@ -384,4 +440,4 @@ lobster_agent/
 - [LangGraph](https://github.com/langchain-ai/langgraph) — graph orchestration and checkpointing
 - [Anthropic API](https://docs.anthropic.com) — `claude-haiku-4-5-20251001` for all LLM calls
 - SQLite — conversation thread persistence via LangGraph MemorySaver
-- pytest — 191 unit and integration tests
+- pytest — 223 unit and integration tests

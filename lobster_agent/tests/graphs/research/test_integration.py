@@ -112,7 +112,7 @@ def test_research_flow_with_llm_mocked(monkeypatch):
         assert result["structured_query"]["query_intent"] == "analytical"
         assert result["structured_query"]["scope"] == "moderate"
         assert len(result["evidence"]) == 2
-        assert result["confidence"] == 0.8
+        assert result["confidence"] == 0.6  # 1 filtered source → ceiling 0.60
         assert len(result["open_questions"]) == 1
         assert "Research completed" in result["summary"]
 
