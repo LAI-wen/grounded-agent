@@ -120,7 +120,8 @@ def invoke_execution_subgraph(state: MainState) -> MainState:
             task_description=normalized_task.get("objective", state["user_request"]),
             context={
                 "user_request": state["user_request"],
-                "research_result": state.get("research_result")
+                "research_result": state.get("research_result"),
+                "workspace_context": state.get("workspace_context", ""),
             },
             task_id=state["task_id"]
         )

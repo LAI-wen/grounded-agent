@@ -73,24 +73,73 @@ Session 2: "What files have you created?" → "hello.txt" named explicitly, 0.95
 
 ---
 
-### Milestone 2 — Memory-aware execution planning — *Not yet started*
+### Milestone 2 — Memory-aware execution planning — **Complete**
 
-The execution planner currently has no knowledge of prior artifacts. If the agent
-created `notes.txt` in Session 1 and is asked to "append to notes.txt" in
-Session 2, the planner does not know the file already exists. M2 will close this
-gap by passing `workspace_context` into `create_execution_plan` so the LLM
-planner can make informed decisions about existing files.
+**Status**: Complete. 172 tests passing. Live-validated with two-session demo.
+
+**What M2 delivers:**
+
+- `wrappers.py` — `workspace_context` passed into `ExecutionState.context`
+- `plan.py` — formats workspace context as a "Known existing artifacts" block
+  in the planner user prompt; excluded from the generic context string
+- `PLAN_EXECUTION_SYSTEM_PROMPT` — added rules: prefer `file_read` before
+  `file_write` for known artifacts; write step `action` must signal preservation
+  semantics ("Append X to existing Y", "preserve prior content and add …")
+- `GENERATE_ACTIONS_SYSTEM_PROMPT` — distinguishes APPEND mode (generate new
+  content only; execute combines) from REPLACE mode (generate full content)
+- `execute.py` — `read_cache` tracks `file_read` results per path; for
+  `file_write` steps whose action contains an append keyword, combines
+  `read_result + new_content` before writing; plain replace semantics unaffected
+- 7 new tests: workspace context in prompt, artifacts block absent without
+  context, preserve/replace prompt assertions, unit tests for combine and
+  no-combine paths, full graph integration
+
+**Live demo result:**
+
+```
+Session 1: "Create notes.txt with 'Project started. Initial notes.'"
+  → success, notes.txt written, 2 store records
+
+Session 2: "Append 'V2 milestone reached.' to notes.txt"
+  → file_read before file_write (workspace artifact awareness)
+  → execute combines: original content preserved + new line appended
+  → notes.txt contains both lines
+```
+
+---
+
+### Milestone 3 — Workspace-aware research continuation — *Not yet started*
+
+M1 and M2 address the write side: what was created and how to continue it.
+M3 addresses the read side: when the agent is asked to research or summarise
+the project's current state, it should produce answers that are grounded in
+both the file system and the workspace history, not just whichever one happens
+to have content.
+
+**Problem M3 addresses:**
+
+Research synthesis currently falls into two separate modes with no integration:
+- When `filtered_sources` has content, synthesis ignores `workspace_context`
+- When `filtered_sources` is empty, synthesis uses only `workspace_context`
+
+The result is that a query like "Summarise what this project has done so far"
+produces either a file-walk answer or a memory answer, but never both together.
+A user who created `notes.txt` and also ran several tasks sees only one half
+of the picture per session.
 
 **Planned deliverables:**
 
-- Pass `workspace_context` to `ExecutionState.context` via `wrappers.py`
-- `create_execution_plan` includes prior artifact list in its system prompt
-- Targeted test: planner uses `file_read` before `file_write` when a file
-  already exists in workspace history
-- Live demo: Session 1 creates `notes.txt`; Session 2 "add a line to notes.txt"
-  produces a plan that reads before writing
+- `synthesize_evidence` always incorporates `workspace_context` when present,
+  regardless of whether `filtered_sources` is empty or populated
+- The synthesis prompt positions workspace history as complementary context
+  to file sources, not a fallback for when they are absent
+- Targeted test: synthesis with both `filtered_sources` and `workspace_context`
+  produces evidence from both sources in the same response
+- Live demo: after two sessions of file creation, a "summarise the project"
+  query names both files and their creation dates from workspace history
 
-No preference detection in M2. That is a separate milestone.
+**Scope boundary:** no new record types, no new graph nodes, no changes to
+`WorkspaceStore`. Only the synthesis prompt and early-return logic.
 
 ---
 

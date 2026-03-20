@@ -218,3 +218,61 @@ Session 2 (new thread_id):
 
 **Not in first milestone (deferred):** preference detection, execution planner
 injection, cross-session preference recall. See roadmap for M2 scope.
+
+---
+
+## Second milestone — Complete
+
+**Status**: Complete. 172 tests passing. Live-validated 2026-03-20.
+
+**Problem addressed:**
+
+M1 gave the planner no knowledge of prior artifacts. A "append to notes.txt"
+request in Session 2 would overwrite the file rather than extend it, because
+the planner had no way to know the file existed and the generator had no way
+to incorporate its contents.
+
+**Deliverables as implemented:**
+
+1. `app/graphs/main/wrappers.py` — `workspace_context` added to
+   `ExecutionState.context` in `invoke_execution_subgraph`
+2. `app/graphs/execution/nodes/plan.py` — extracts `workspace_context` from
+   context dict; formats as "Known existing artifacts from workspace context"
+   block in user prompt; excluded from generic context string; log annotated
+   when injected
+3. `app/graphs/execution/prompts/templates.py`:
+   - `PLAN_EXECUTION_SYSTEM_PROMPT` — added "Known existing artifacts" rules:
+     prefer `file_read` before `file_write` for known files; write step action
+     MUST signal preservation semantics; examples provided for planner
+   - `GENERATE_ACTIONS_SYSTEM_PROMPT` — added APPEND mode / REPLACE mode
+     distinction: in APPEND mode the generator produces only new content;
+     execute combines at runtime
+4. `app/graphs/execution/nodes/execute.py` — `read_cache` (path → content)
+   tracks `file_read` results; before each `file_write`, if the path was
+   previously read AND the step action contains an append keyword, content is
+   combined as `existing.rstrip("\\n") + "\\n" + new_content`; replace
+   semantics (no keyword) are unaffected
+5. Tests — 7 new tests in `tests/graphs/test_execution.py`:
+   workspace context in prompt, artifacts block absent without context,
+   combine unit test, no-combine unit test, plan/generate prompt assertions,
+   full graph integration
+
+**Live demo result:**
+
+```
+Session 1: "Create notes.txt with 'Project started. Initial notes.'"
+  → success, store written
+
+Session 2: "Append 'V2 milestone reached.' to notes.txt"
+  → planner emits file_read → file_write (artifact awareness active)
+  → generator produces only new content (APPEND mode)
+  → execute combines: read result + new content
+  → final file: "Project started. Initial notes.\nV2 milestone reached."
+```
+
+**Append keyword set** (triggers combine in execute):
+`"append"`, `"preserve existing"`, `"preserve prior"`, `"add to existing"`,
+`"based on file_read"`, `"base on file_read"`, `"add new"`
+
+**Not in M2:** preference detection, research continuation improvements.
+See roadmap M3.

@@ -20,6 +20,20 @@ Rules:
 - If the task genuinely cannot be done with file_read / file_write alone,
   include a single step with tool=null and explain the limitation in "action".
 
+Known existing artifacts (when provided):
+- If the task asks to update, append to, extend, or modify a file that appears
+  in the known existing artifacts list, include a file_read step before any
+  file_write step on that file so the current contents can be incorporated.
+- Do not overwrite or recreate a known existing file unless the task explicitly
+  asks to replace, rewrite, regenerate, or discard prior contents.
+- For update-style write steps the "action" field MUST describe preservation
+  semantics. Use one of these phrasings (adapt as appropriate):
+    "Append <new content> to existing <file> contents"
+    "Update <file>: preserve prior content and add <new content>"
+    "Write <file> based on file_read result, adding <new content>"
+  The generate node reads the action field to decide whether to produce
+  only the new content (append mode) or a full replacement.
+
 Return ONLY a valid JSON array (no markdown, no commentary). Each element:
 {
   "step_id": "step_N",
@@ -35,7 +49,7 @@ Return ONLY a valid JSON array (no markdown, no commentary). Each element:
 
 PLAN_EXECUTION_USER_PROMPT = """\
 Task: {task_description}
-
+{workspace_artifacts}
 Context: {context}
 
 Create an execution plan as a JSON array of steps.
@@ -48,16 +62,26 @@ Given an execution plan, produce the exact tool_input for each step.
 For file_read steps:
   tool_input = {{"path": "<relative path>"}}
 
-For file_write steps:
-  tool_input = {{"path": "<relative path>", "content": "<complete file content to write>"}}
+For file_write steps — two modes depending on the step's action description:
+
+  APPEND mode (action mentions "append", "preserve existing", "add to existing",
+               "based on file_read", "preserve prior content"):
+    Generate ONLY the new content to be added or inserted — do NOT include the
+    existing file contents. The execution engine will prepend the file_read
+    result automatically, so the final file will contain both.
+    tool_input = {{"path": "<relative path>", "content": "<new content only>"}}
+
+  REPLACE mode (action describes creating a new file or explicitly replacing):
+    Generate the complete intended file content.
+    tool_input = {{"path": "<relative path>", "content": "<complete file content>"}}
 
 For steps with tool=null:
   tool_input = {{}}
 
 Rules:
-- Generate complete, well-formed content for file_write steps. Do not truncate.
 - Do not modify paths from the plan.
 - If a file_write step describes code, write syntactically correct code.
+- In APPEND mode, end the new content with a newline so it joins cleanly.
 - Return ONLY a valid JSON array (no markdown, no commentary). Each element:
   {{"step_id": "<step id from plan>", "tool_input": {{...}}}}
 """

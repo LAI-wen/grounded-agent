@@ -64,17 +64,38 @@ def execute_actions(state: ExecutionState) -> ExecutionState:
     errors: list[Error] = []
     exec_logs: list[str] = list(state.get("logs", []))
     real_actions_ran: int = 0
+    # Cache file_read results keyed by path for content-preserving writes
+    read_cache: dict[str, str] = {}
+
+    # Keywords in a write step's action that signal append / preserve semantics
+    _APPEND_KEYWORDS = frozenset({
+        "append", "preserve existing", "preserve prior", "add to existing",
+        "based on file_read", "base on file_read", "add new",
+    })
 
     for step in execution_plan:
         tool = step.get("tool")
         tool_input = step.get("tool_input") or {}
         step_id = step.get("step_id", "unknown")
-        action = step.get("action", "")
+        action = step.get("action", "").lower()
 
         if tool is None:
             actions_taken.append(f"[{step_id}] No-op: {action}")
             exec_logs.append(f"[{step_id}] Skipped no-tool step")
             continue
+
+        # For file_write targeting a previously-read file: combine existing
+        # content with the new content when action signals preservation intent.
+        if tool == "file_write":
+            path_str = tool_input.get("path", "")
+            if path_str in read_cache and any(kw in action for kw in _APPEND_KEYWORDS):
+                existing = read_cache[path_str]
+                new_content = tool_input.get("content", "")
+                combined = existing.rstrip("\n") + "\n" + new_content
+                tool_input = {**tool_input, "content": combined}
+                exec_logs.append(
+                    f"[{step_id}] file_write: combining file_read result with new content"
+                )
 
         try:
             result_data = execute_safe_action(
@@ -87,6 +108,10 @@ def execute_actions(state: ExecutionState) -> ExecutionState:
             output_summary = str(result_data.get("output", ""))[:120]
             actions_taken.append(f"[{step_id}] {tool}: {output_summary}")
             exec_logs.append(f"[{step_id}] {tool} succeeded")
+
+            # Cache file_read output for use by subsequent write steps
+            if tool == "file_read":
+                read_cache[tool_input.get("path", "")] = result_data.get("output", "")
 
             # Record artifact
             path_str = tool_input.get("path", "")

@@ -26,7 +26,8 @@ def create_execution_plan(state: ExecutionState) -> ExecutionState:
     """
     task_description = state["task_description"]
     context = state.get("context", {})
-    context_str = str(context) if context else "None"
+    workspace_context = context.get("workspace_context", "")
+    context_str = str({k: v for k, v in context.items() if k != "workspace_context"}) or "None"
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -34,10 +35,16 @@ def create_execution_plan(state: ExecutionState) -> ExecutionState:
 
     client = Anthropic(api_key=api_key)
 
+    workspace_artifacts_block = (
+        f"Known existing artifacts from workspace context:\n{workspace_context}\n"
+        if workspace_context else ""
+    )
+
     try:
         user_prompt = PLAN_EXECUTION_USER_PROMPT.format(
             task_description=task_description,
             context=context_str,
+            workspace_artifacts=workspace_artifacts_block,
         )
 
         response = client.messages.create(
@@ -61,12 +68,13 @@ def create_execution_plan(state: ExecutionState) -> ExecutionState:
             }
             execution_plan.append(step)
 
+        workspace_note = " (workspace context injected)" if workspace_context else ""
         return {
             **state,
             "execution_plan": execution_plan,
             "logs": [
                 *state.get("logs", []),
-                f"LLM plan created: {len(execution_plan)} step(s)",
+                f"LLM plan created: {len(execution_plan)} step(s){workspace_note}",
             ],
         }
 

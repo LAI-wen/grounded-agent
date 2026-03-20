@@ -504,5 +504,231 @@ def test_full_workflow_safety_abort_via_llm(mock_plan_cls, mock_gen_cls, tmp_pat
     assert list(tmp_path.iterdir()) == []
 
 
+# ---------------------------------------------------------------------------
+# V2 M2: workspace_context injection into planner
+# ---------------------------------------------------------------------------
+
+@patch("app.graphs.execution.nodes.plan.Anthropic")
+@patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"})
+def test_plan_workspace_context_appears_in_prompt(mock_plan_cls):
+    """workspace_context from context dict is formatted into the planner prompt."""
+    from app.graphs.execution.nodes.plan import create_execution_plan
+
+    workspace_ctx = (
+        "\nWorkspace history (recent tasks):\n"
+        "- [2026-03-20] execution: \"Create notes.txt\" → success, artifacts: [notes.txt]\n"
+    )
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _mock_anthropic_response(
+        json.dumps([{
+            "step_id": "step_1", "action": "read notes", "tool": "file_read",
+            "params": {"path": "notes.txt"}, "status": "pending",
+        }, {
+            "step_id": "step_2", "action": "write notes", "tool": "file_write",
+            "params": {"path": "notes.txt", "content_purpose": "updated"}, "status": "pending",
+        }])
+    )
+    mock_plan_cls.return_value = mock_client
+
+    state = _make_state(
+        task_description="Add a new section to notes.txt",
+        context={"project_root": "/tmp/proj", "workspace_context": workspace_ctx},
+    )
+    create_execution_plan(state)
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    prompt = call_kwargs["messages"][0]["content"]
+    assert "Known existing artifacts from workspace context" in prompt
+    assert "notes.txt" in prompt
+
+
+@patch("app.graphs.execution.nodes.plan.Anthropic")
+@patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"})
+def test_plan_no_workspace_context_omits_artifacts_block(mock_plan_cls):
+    """When workspace_context is absent the artifacts block is not injected."""
+    from app.graphs.execution.nodes.plan import create_execution_plan
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = _mock_anthropic_response(
+        json.dumps([{
+            "step_id": "step_1", "action": "write file", "tool": "file_write",
+            "params": {"path": "out.txt", "content_purpose": "content"}, "status": "pending",
+        }])
+    )
+    mock_plan_cls.return_value = mock_client
+
+    state = _make_state(
+        task_description="Create out.txt",
+        context={"project_root": "/tmp/proj"},
+    )
+    create_execution_plan(state)
+
+    call_kwargs = mock_client.messages.create.call_args[1]
+    prompt = call_kwargs["messages"][0]["content"]
+    assert "Known existing artifacts from workspace context" not in prompt
+
+
+@patch("app.graphs.execution.nodes.generate.Anthropic")
+@patch("app.graphs.execution.nodes.plan.Anthropic")
+@patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"})
+def test_full_workflow_read_before_write_for_known_artifact(mock_plan_cls, mock_gen_cls, tmp_path):
+    """Full graph run: LLM returns file_read + file_write plan for a known artifact;
+    both steps execute and the final file incorporates both read and written content."""
+    original_content = "Original line.\n"
+    notes_path = tmp_path / "notes.txt"
+    notes_path.write_text(original_content)
+
+    workspace_ctx = (
+        "\nWorkspace history (recent tasks):\n"
+        "- [2026-03-20] execution: \"Create notes.txt\" → success, artifacts: [notes.txt]\n"
+    )
+    # Write action contains "append" keyword — triggers execute's combine logic.
+    # Generator produces ONLY the new content; execute prepends the file_read result.
+    plan_data = [
+        {
+            "step_id": "step_1",
+            "action": "Read existing notes.txt",
+            "tool": "file_read",
+            "params": {"path": "notes.txt"},
+            "status": "pending",
+        },
+        {
+            "step_id": "step_2",
+            "action": "Append new section to existing notes.txt contents",
+            "tool": "file_write",
+            "params": {"path": "notes.txt", "content_purpose": "new section only"},
+            "status": "pending",
+        },
+    ]
+    # Generator produces only the new content (APPEND mode)
+    gen_data = [
+        {"step_id": "step_1", "tool_input": {"path": "notes.txt"}},
+        {
+            "step_id": "step_2",
+            "tool_input": {
+                "path": "notes.txt",
+                "content": "New section.\n",  # new content only — execute combines
+            },
+        },
+    ]
+
+    mock_plan_client = MagicMock()
+    mock_plan_client.messages.create.return_value = _mock_anthropic_response(json.dumps(plan_data))
+    mock_plan_cls.return_value = mock_plan_client
+
+    mock_gen_client = MagicMock()
+    mock_gen_client.messages.create.return_value = _mock_anthropic_response(json.dumps(gen_data))
+    mock_gen_cls.return_value = mock_gen_client
+
+    graph = create_execution_graph()
+    compiled = graph.compile()
+
+    init = create_execution_input(
+        task_description="Add a new section to notes.txt",
+        context={"project_root": str(tmp_path), "workspace_context": workspace_ctx},
+        task_id="test-read-before-write",
+    )
+    result = compiled.invoke(init)
+
+    assert result["success"] is True
+    final_content = notes_path.read_text()
+    # Original content preserved AND new content added
+    assert "Original line." in final_content, "Original content must be preserved"
+    assert "New section." in final_content, "New content must be present"
+    assert result["execution_result"]["status"] == "success"
+    assert len([a for a in result["execution_result"]["actions_taken"] if "No-op" not in a]) == 2
+
+
+def test_execute_combines_read_result_for_append_action(tmp_path):
+    """execute_actions prepends file_read content for write steps with append keyword."""
+    original = "Existing line.\n"
+    notes = tmp_path / "notes.txt"
+    notes.write_text(original)
+
+    safety = {"passed": True, "violations": [], "warnings": [], "flags": []}
+    plan = [
+        {
+            "step_id": "step_1", "action": "Read notes.txt", "tool": "file_read",
+            "params": {"path": "notes.txt"}, "tool_input": {"path": "notes.txt"},
+            "status": "pending",
+        },
+        {
+            "step_id": "step_2",
+            "action": "Append new entry to existing notes.txt contents",
+            "tool": "file_write",
+            "params": {"path": "notes.txt"},
+            "tool_input": {"path": "notes.txt", "content": "New entry.\n"},
+            "status": "pending",
+        },
+    ]
+    state = _make_state(
+        execution_plan=plan,
+        safety_check=safety,
+        context={"project_root": str(tmp_path)},
+    )
+    result = execute_actions(state)
+
+    assert result["success"] is True
+    final = notes.read_text()
+    assert "Existing line." in final, "Original content must be preserved"
+    assert "New entry." in final, "New content must be appended"
+    assert final.index("Existing line.") < final.index("New entry."), "Original must precede new"
+
+
+def test_execute_does_not_combine_without_append_keyword(tmp_path):
+    """execute_actions does NOT combine when write action lacks append keyword — plain replace."""
+    original = "Original content.\n"
+    notes = tmp_path / "notes.txt"
+    notes.write_text(original)
+
+    safety = {"passed": True, "violations": [], "warnings": [], "flags": []}
+    plan = [
+        {
+            "step_id": "step_1", "action": "Read notes.txt", "tool": "file_read",
+            "params": {"path": "notes.txt"}, "tool_input": {"path": "notes.txt"},
+            "status": "pending",
+        },
+        {
+            "step_id": "step_2",
+            "action": "Write notes.txt with new content",  # no append keyword
+            "tool": "file_write",
+            "params": {"path": "notes.txt"},
+            "tool_input": {"path": "notes.txt", "content": "Replacement content.\n"},
+            "status": "pending",
+        },
+    ]
+    state = _make_state(
+        execution_plan=plan,
+        safety_check=safety,
+        context={"project_root": str(tmp_path)},
+    )
+    result = execute_actions(state)
+
+    assert result["success"] is True
+    final = notes.read_text()
+    # Replace semantics: original should NOT be in the file
+    assert "Original content." not in final
+    assert "Replacement content." in final
+
+
+def test_plan_prompt_contains_preservation_instructions():
+    """PLAN_EXECUTION_SYSTEM_PROMPT includes content-preservation rules for update steps."""
+    from app.graphs.execution.prompts.templates import PLAN_EXECUTION_SYSTEM_PROMPT
+    lowered = PLAN_EXECUTION_SYSTEM_PROMPT.lower()
+    assert "preserve" in lowered
+    assert "append" in lowered
+    assert "replace" in lowered or "discard" in lowered
+
+
+def test_generate_prompt_contains_append_mode_instructions():
+    """GENERATE_ACTIONS_SYSTEM_PROMPT distinguishes APPEND mode from REPLACE mode."""
+    from app.graphs.execution.prompts.templates import GENERATE_ACTIONS_SYSTEM_PROMPT
+    assert "APPEND mode" in GENERATE_ACTIONS_SYSTEM_PROMPT
+    assert "REPLACE mode" in GENERATE_ACTIONS_SYSTEM_PROMPT
+    assert "file_read result" in GENERATE_ACTIONS_SYSTEM_PROMPT.lower() or \
+           "file_read" in GENERATE_ACTIONS_SYSTEM_PROMPT
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

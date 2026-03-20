@@ -134,6 +134,13 @@ V2 M1 two-session demo (live-validated):
 | 1 | Create hello.txt | File written, store records `task_summary` + `artifact` |
 | 2 (new thread) | What files have you created? | Answers `hello.txt` from workspace history, 0.95 confidence |
 
+V2 M2 two-session demo (live-validated):
+
+| Session | Request | Result |
+|---|---|---|
+| 1 | Create notes.txt with initial content | File written, store records written |
+| 2 (new thread) | Append new line to notes.txt | `file_read` before `file_write`; original content preserved; new line appended |
+
 ---
 
 ## CLI
@@ -179,7 +186,7 @@ cd lobster_agent
 pytest tests/ -q
 ```
 
-165 tests, no external dependencies required.
+172 tests, no external dependencies required.
 
 ---
 
@@ -216,7 +223,8 @@ lobster_agent/
 - **Retrieval**: local file walk only — no HTTP sources
 - **File writes**: full overwrite only — no append semantics
 - **Workspace memory**: task summaries and artifact paths only — no preference
-  detection, no execution planner injection of prior artifact context (planned V2 M2)
+  detection, no research/workspace integration when both file sources and
+  workspace history are present (planned V2 M3)
 - **Memory inspection**: no CLI command to view or clear workspace memory —
   inspect via `<project_root>/.lobster/workspace_memory.jsonl` directly
 - **Output**: blocking, synchronous — no streaming
@@ -230,4 +238,4 @@ lobster_agent/
 - [LangGraph](https://github.com/langchain-ai/langgraph) — graph orchestration and checkpointing
 - [Anthropic API](https://docs.anthropic.com) — `claude-haiku-4-5-20251001` for all LLM calls
 - SQLite — conversation thread persistence via LangGraph MemorySaver
-- pytest — 165 unit and integration tests
+- pytest — 172 unit and integration tests
