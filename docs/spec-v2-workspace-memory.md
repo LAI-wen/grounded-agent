@@ -1,6 +1,6 @@
 # Spec: V2 Workspace Memory
 
-**Status**: Draft. Not yet implemented.
+**Status**: Milestone 1 complete. Live-validated 2026-03-20.
 **Depends on**: V1 complete (150 tests passing, live-validated).
 
 ---
@@ -134,15 +134,18 @@ fail the task response.
 
 | File | Change |
 |---|---|
-| `app/memory/workspace.py` | New — read/write logic, record types |
+| `app/memory/workspace.py` | New — `WorkspaceStore` with read/write logic and record types |
 | `app/main.py` | Read before invoke, write after invoke |
 | `app/graphs/main/state.py` | Add `workspace_context: Optional[str]` to `MainState` |
 | `app/graphs/main/nodes.py` | Inject `workspace_context` into `normalize_task` prompt |
 | `app/graphs/main/prompts/templates.py` | Add `{workspace_context}` to `NORMALIZE_TASK_USER_PROMPT` |
-| `app/graphs/main/wrappers.py` | Pass recent artifacts to execution context |
+| `app/graphs/main/wrappers.py` | Pass `workspace_context` in research context dict |
+| `app/graphs/research/nodes/synthesize_evidence.py` | Read `workspace_context` from context; skip early-return when present |
+| `app/graphs/research/prompts/templates.py` | Add `{workspace_context}` to `SYNTHESIZE_EVIDENCE_USER_PROMPT` |
 
-No changes to subgraph internals, state schemas beyond `MainState`, or
-the graph topology.
+The `wrappers.py` and research synthesis changes were added during implementation
+(not in the original spec) after validating that the synthesis layer early-returned
+when `filtered_sources` was empty, preventing workspace-context-only answers.
 
 ---
 
@@ -178,32 +181,40 @@ files are not committed.
 
 ---
 
-## First milestone
+## First milestone — Complete
 
-A minimal working write + read loop, without preference detection:
+**Status**: Complete. 165 tests passing. Live-validated 2026-03-20.
 
-**Deliverables:**
-1. `app/memory/workspace.py` with `read_workspace_context()` and
-   `write_task_summary()` — task summaries and artifact records only
-2. `app/main.py` reads context before each turn, writes summary after
-3. `MainState` gets `workspace_context: Optional[str] = None`
-4. `normalize_task` includes `workspace_context` in its LLM prompt when present
-5. `lobster_agent/.gitignore` updated to exclude `.lobster/`
-6. Tests: `tests/memory/test_workspace.py` — read/write round-trip,
-   retention limit enforcement, graceful no-op when store is absent
+**Deliverables as implemented:**
 
-**Validates with this demo scenario:**
+1. `app/memory/workspace.py` — `WorkspaceStore` class with `read_context()`,
+   `write_task_summary()`, token guard (1500 chars), path normalisation,
+   retention trimming (50 task summaries / 100 artifact records)
+2. `app/main.py` — reads context before graph invocation, writes after
+3. `MainState` — `workspace_context: Optional[str]` field added
+4. `normalize_task` — `workspace_context` injected into LLM prompt
+5. `synthesize_evidence` — `workspace_context` received via research context
+   dict; early-return bypassed when workspace context is present and
+   filtered_sources is empty (added during implementation)
+6. `lobster_agent/.gitignore` — `.lobster/` excluded
+7. Tests — `tests/memory/test_workspace.py` (13 tests) and 2 synthesis
+   behaviour tests added to `tests/graphs/research/test_nodes.py`
+
+**Live demo result:**
 
 ```
 Session 1:
-  You: Create hello.txt with Hello World
-  → file written, task_summary written to .lobster/workspace_memory.jsonl
+  Request: Create hello.txt with "Hello from Lobster Agent"
+  Status: success
+  Store: 2 records written (task_summary + artifact)
 
 Session 2 (new thread_id):
-  You: What files have you created in this project?
-  → normalize_task receives workspace_context listing hello.txt
-  → research synthesis can answer from workspace context, not just file walk
+  Request: What files have you created in this project?
+  Status: success
+  Response: "A file named hello.txt was created during this project session"
+  Confidence: 95%
+  Source: workspace history, not file walk
 ```
 
-**Not in first milestone**: preference detection, execution planner injection,
-cross-session preference recall. Those follow once the read/write loop is stable.
+**Not in first milestone (deferred):** preference detection, execution planner
+injection, cross-session preference recall. See roadmap for M2 scope.

@@ -195,24 +195,30 @@ lobster_agent/
 │   │   ├── research/           # Research subgraph
 │   │   ├── execution/          # Execution subgraph
 │   │   └── review/             # Review subgraph
-│   ├── memory/                 # SQLite checkpointer
+│   ├── memory/
+│   │   ├── checkpointer.py     # SQLite thread checkpointer
+│   │   └── workspace.py        # WorkspaceStore — per-project task/artifact log
 │   ├── schemas/                # Shared types: Artifact, Error, TraceEntry
 │   └── tools/                  # file_read / file_write (project-scoped)
 ├── scripts/
 │   └── validate_live.py        # Live validation (requires API key)
 └── tests/
+    ├── graphs/                 # Subgraph and integration tests
+    └── memory/                 # WorkspaceStore unit tests
 ```
 
 ---
 
-## Known Limitations (V1)
+## Known Limitations
 
 - **Tools**: `file_read` and `file_write` only — no shell commands, no web
   requests, no API calls from within execution
 - **Retrieval**: local file walk only — no HTTP sources
 - **File writes**: full overwrite only — no append semantics
-- **Memory**: conversation history within a thread only — no cross-thread
-  or long-term user memory
+- **Workspace memory**: task summaries and artifact paths only — no preference
+  detection, no execution planner injection of prior artifact context (planned V2 M2)
+- **Memory inspection**: no CLI command to view or clear workspace memory —
+  inspect via `<project_root>/.lobster/workspace_memory.jsonl` directly
 - **Output**: blocking, synchronous — no streaming
 - **Deployment**: local only — no server or authentication layer
 
@@ -224,4 +230,4 @@ lobster_agent/
 - [LangGraph](https://github.com/langchain-ai/langgraph) — graph orchestration and checkpointing
 - [Anthropic API](https://docs.anthropic.com) — `claude-haiku-4-5-20251001` for all LLM calls
 - SQLite — conversation thread persistence via LangGraph MemorySaver
-- pytest — 150 unit and integration tests
+- pytest — 165 unit and integration tests

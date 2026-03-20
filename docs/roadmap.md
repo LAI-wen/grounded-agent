@@ -43,21 +43,54 @@ The agent needs a lightweight durable record of its workspace: what it has
 created, what preferences have been expressed, and what recent tasks have done.
 This is the foundation for genuinely contextual behaviour across sessions.
 
-### What V2 will deliver
-
-A file-backed workspace memory store that:
-
-- persists a record of completed tasks (what ran, what was produced)
-- retains workspace-scoped preferences stated by the user
-- tracks files the agent has created or read within the project root
-- injects relevant prior context into task classification and execution planning
-
-Workspace memory is scoped to a single project directory. It is not a
-cross-project or user-profile store. It does not require vector search.
-
 ### V2 spec
 
 See [`spec-v2-workspace-memory.md`](spec-v2-workspace-memory.md).
+
+---
+
+### Milestone 1 — Read/write loop — **Complete**
+
+**Status**: Complete. 165 tests passing. Live-validated with two-session demo.
+
+**What M1 delivers:**
+
+- `app/memory/workspace.py` — `WorkspaceStore` with `read_context()` and `write_task_summary()`
+- Append-only JSONL at `<project_root>/.lobster/workspace_memory.jsonl`
+- Two record types: `task_summary` and `artifact`
+- Read path: `workspace_context` injected into `MainState` before graph runs
+- `normalize_task` receives `workspace_context` — cross-session task classification
+- `synthesize_evidence` receives `workspace_context` via research context dict — can answer "what files have you created?" from memory even when file walk returns nothing
+- Write path: fires only on `status == "success"` or verdict `== "pass"`
+- Guards: 1500-char token cap, path normalisation, retention trimming (50 tasks / 100 artifacts)
+
+**Live demo result:**
+
+```
+Session 1: "Create hello.txt" → success, 2 store records written
+Session 2: "What files have you created?" → "hello.txt" named explicitly, 0.95 confidence
+```
+
+---
+
+### Milestone 2 — Memory-aware execution planning — *Not yet started*
+
+The execution planner currently has no knowledge of prior artifacts. If the agent
+created `notes.txt` in Session 1 and is asked to "append to notes.txt" in
+Session 2, the planner does not know the file already exists. M2 will close this
+gap by passing `workspace_context` into `create_execution_plan` so the LLM
+planner can make informed decisions about existing files.
+
+**Planned deliverables:**
+
+- Pass `workspace_context` to `ExecutionState.context` via `wrappers.py`
+- `create_execution_plan` includes prior artifact list in its system prompt
+- Targeted test: planner uses `file_read` before `file_write` when a file
+  already exists in workspace history
+- Live demo: Session 1 creates `notes.txt`; Session 2 "add a line to notes.txt"
+  produces a plan that reads before writing
+
+No preference detection in M2. That is a separate milestone.
 
 ---
 
